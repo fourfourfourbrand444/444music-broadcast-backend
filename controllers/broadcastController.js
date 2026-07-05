@@ -2,13 +2,14 @@
  * controllers/broadcastController.js
  *
  * Ties together userService + templateService + queueService +
- * campaignService + emailProvider to handle all 5 admin endpoints:
+ * campaignService + emailProvider to handle all 6 admin endpoints:
  *
  *   POST /api/admin/broadcast
  *   POST /api/admin/test-email
  *   GET  /api/admin/campaigns
  *   GET  /api/admin/campaign/:id
  *   GET  /api/admin/statistics
+ *   GET  /api/admin/users
  */
 
 const userService = require('../services/userService');
@@ -151,10 +152,32 @@ async function getStatistics(req, res) {
   });
 }
 
+/**
+ * GET /api/admin/users
+ * Returns the list of opted-in users, used by the admin dashboard's
+ * "select specific users" picker.
+ */
+async function getUsersList(req, res) {
+  const users = await userService.getOptedInUsers();
+
+  return res.status(200).json({
+    success: true,
+    count: users.length,
+    users: users.map((u) => ({
+      uid: u.uid,
+      displayName: u.displayName,
+      email: u.email,
+      subscription: u.subscription,
+      country: u.country,
+    })),
+  });
+}
+
 module.exports = {
   sendBroadcast,
   sendTestEmail,
   listCampaigns,
   getCampaign,
   getStatistics,
+  getUsersList,
 };

@@ -1,7 +1,7 @@
 /**
  * routes/adminRoutes.js
  *
- * Maps the 5 admin endpoints to their controller functions, and
+ * Maps the 6 admin endpoints to their controller functions, and
  * applies middleware in this order for every route:
  *   1. requireAdminSecret   (auth)
  *   2. generalLimiter        (baseline rate limit, applied to whole router)
@@ -64,6 +64,12 @@ router.get(
 router.get(
   '/statistics',
   asyncHandler(broadcastController.getStatistics)
+);
+
+// GET /api/admin/users
+router.get(
+  '/users',
+  asyncHandler(broadcastController.getUsersList)
 );
 
 module.exports = router;

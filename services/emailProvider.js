@@ -19,9 +19,17 @@
  * If EMAIL_PROVIDER=none or EMAIL_API_KEY is missing, this module
  * runs in "dry run" mode: it logs what WOULD be sent instead of
  * actually sending anything.
+ *
+ * ── DAILY QUOTA TRACKING ──
+ * Brevo's free plan caps transactional sends at 300/day. Before
+ * attempting a real send, this file checks utils/emailUsageTracker.js
+ * to make sure quota remains; after a successful real send, it
+ * increments the counter. Dry-run sends are not counted, since they
+ * never touch Brevo's cap.
  */
 
 const logger = require('../utils/logger');
+const { hasQuotaRemaining, incrementEmailCount } = require('../utils/emailUsageTracker');
 
 const PROVIDER = (process.env.EMAIL_PROVIDER || 'none').toLowerCase();
 const API_KEY = process.env.EMAIL_API_KEY || '';
@@ -141,7 +149,7 @@ async function sendEmail({ to, subject, html, text }) {
   }
 
   if (PROVIDER === 'none' || !API_KEY) {
-    // DRY-RUN MODE: log instead of sending.
+    // DRY-RUN MODE: log instead of sending. Not counted against quota.
     logger.debug(`[DRY-RUN] Would send email to: ${to} | Subject: "${subject}"`);
     return { success: true, messageId: `dry-run-${Date.now()}` };
   }
@@ -149,6 +157,24 @@ async function sendEmail({ to, subject, html, text }) {
   if (PROVIDER === 'brevo') {
     if (!brevoClient) {
       return { success: false, error: 'Brevo client is not initialized.' };
+    }
+
+    // Check daily quota BEFORE attempting a real send, so we fail
+    // fast with a clear error instead of letting Brevo return a 429.
+    let quotaOk;
+    try {
+      quotaOk = await hasQuotaRemaining();
+    } catch (err) {
+      // If the quota check itself fails (e.g. Firestore hiccup), log
+      // it but don't block sending — better to attempt the send than
+      // to falsely block every email over an infra blip.
+      logger.error(`Failed to check email quota: ${err.message}. Proceeding with send.`);
+      quotaOk = true;
+    }
+
+    if (!quotaOk) {
+      logger.warn(`Daily email limit reached. Blocked send to: ${to}`);
+      return { success: false, error: 'DAILY_EMAIL_LIMIT_REACHED' };
     }
 
     try {
@@ -159,6 +185,15 @@ async function sendEmail({ to, subject, html, text }) {
         sender: { name: FROM_NAME, email: FROM_EMAIL },
         to: [{ email: to }],
       });
+
+      // Increment usage only after a confirmed successful send.
+      try {
+        await incrementEmailCount();
+      } catch (err) {
+        // Don't fail the whole send just because the counter write
+        // failed — the email already went out. Just log it.
+        logger.error(`Email sent but failed to increment usage counter: ${err.message}`);
+      }
 
       return {
         success: true,
@@ -185,6 +220,9 @@ async function sendEmail({ to, subject, html, text }) {
  * each one in sequence. This is intentional — it keeps behavior
  * consistent and predictable regardless of provider, and queueService
  * already handles batching/rate limiting at a higher level.
+ *
+ * Quota checking and counting is handled automatically per-message
+ * since sendBulk calls sendEmail() internally.
  *
  * @param {Array<{ to, subject, html, text }>} messages
  * @returns {Promise<Array<{ to, success, messageId?, error? }>>}

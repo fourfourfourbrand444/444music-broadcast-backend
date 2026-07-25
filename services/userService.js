@@ -6,6 +6,23 @@
  *
  * Filters recipients based on the "sendTo" targeting option and
  * ALWAYS excludes users whose emailOptIn is not explicitly true.
+ *
+ * ── FIX: getUsersByIds no longer queries a "uid" FIELD ──
+ * This used to run `.where('uid', 'in', chunk)`, which only matches
+ * documents that have a `uid` field written inside them. Some recently
+ * created accounts (Google Sign-In signups from last night onward)
+ * are missing that field entirely — their document ID still equals
+ * their Firebase Auth uid, but nothing inside the document repeats it.
+ * That meant those users were silently invisible to "selected"
+ * broadcasts (returned zero matches) despite having emailOptIn: true.
+ *
+ * Firestore document IDs always exist, regardless of what fields a
+ * document happens to contain, so getUsersByIds now fetches each
+ * document directly by ID (doc(id).get()) instead of querying a field
+ * that account-creation code sometimes forgets to write. This is the
+ * immediate, safe fix — the actual signup flow should also be checked
+ * separately to make sure new accounts always get a `uid` field going
+ * forward, but this change means broadcasts work correctly either way.
  */
 
 const { db } = require('../config/firebase');
@@ -32,9 +49,14 @@ async function getOptedInUsers() {
 }
 
 /**
- * Fetches specific users by their UIDs, then filters to only those
- * with emailOptIn === true (so "selected users" can never bypass
- * the opt-in requirement).
+ * Fetches specific users by their document IDs (which are the same as
+ * their Firebase Auth uid), then filters to only those with
+ * emailOptIn === true (so "selected users" can never bypass the
+ * opt-in requirement).
+ *
+ * Fetches each document directly by ID rather than querying a `uid`
+ * field, since document IDs are guaranteed to exist even when a
+ * document is missing other expected fields.
  *
  * @param {Array<string>} uids
  * @returns {Promise<Array<Object>>}
@@ -44,27 +66,24 @@ async function getUsersByIds(uids) {
     return [];
   }
 
-  // Firestore "in" queries are limited to 30 values per query (as of
-  // current Firestore limits), so we chunk the UID list into batches.
-  const CHUNK_SIZE = 30;
-  const chunks = [];
-  for (let i = 0; i < uids.length; i += CHUNK_SIZE) {
-    chunks.push(uids.slice(i, i + CHUNK_SIZE));
-  }
+  const usersRef = db.collection(COLLECTIONS.USERS);
 
-  const results = [];
+  const docs = await Promise.all(
+    uids.map(async (id) => {
+      try {
+        const doc = await usersRef.doc(id).get();
+        return doc.exists ? doc : null;
+      } catch (err) {
+        logger.error(`Failed to fetch user document "${id}": ${err.message}`);
+        return null;
+      }
+    })
+  );
 
-  for (const chunk of chunks) {
-    const snapshot = await db
-      .collection(COLLECTIONS.USERS)
-      .where('uid', 'in', chunk)
-      .where('emailOptIn', '==', true)
-      .get();
-
-    snapshot.docs.forEach((doc) => results.push(normalizeUser(doc)));
-  }
-
-  return results;
+  return docs
+    .filter((doc) => doc !== null)
+    .map((doc) => normalizeUser(doc))
+    .filter((user) => user.emailOptIn === true);
 }
 
 /**
@@ -111,14 +130,24 @@ async function getRecipients(sendTo, selectedUserIds = []) {
  * the fields this system needs. Missing fields default to safe values
  * so templateService never crashes on personalization.
  *
- * @param {FirebaseFirestore.QueryDocumentSnapshot} doc
+ * The document ID is always used as the canonical `uid` here — this
+ * matches Firebase Auth's uid regardless of whether the document also
+ * happens to contain its own (sometimes missing) `uid` field.
+ *
+ * NOTE: Firestore docs in this collection store the artist's display
+ * name under `name` (see users/{uid}.name), not `displayName`. We check
+ * `name` first, then fall back to `displayName` in case any older docs
+ * used that field instead, and only fall back to the generic 'Artist'
+ * label if neither is present.
+ *
+ * @param {FirebaseFirestore.QueryDocumentSnapshot|FirebaseFirestore.DocumentSnapshot} doc
  * @returns {Object}
  */
 function normalizeUser(doc) {
   const data = doc.data();
   return {
-    uid: data.uid || doc.id,
-    displayName: data.displayName || 'Artist',
+    uid: doc.id,
+    displayName: data.name || data.displayName || 'Artist',
     email: data.email || '',
     country: data.country || '',
     subscription: data.subscription || SUBSCRIPTION_TIERS.FREE,

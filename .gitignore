@@ -26,4 +26,12 @@ firebase-debug.log
 
 # Build artifacts (none expected, but just in case)
 dist/
-build/
+build/.claude/
+.codex/
+.claude.json
+.codex.json
+.bonto/
+.webslop/
+.mcp.json
+AGENTS.md
+.claude/

@@ -1,0 +1,1327 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>444Music — Broadcast Admin</title>
+  <style>
+    :root {
+      --bg: #fafafa;
+      --card: #ffffff;
+      --border: #e5e5e5;
+      --text: #1a1a1a;
+      --muted: #6b6b6b;
+      --accent: #111111;
+      --accent-hover: #333333;
+      --success: #1e7e34;
+      --success-bg: #eaf7ee;
+      --error: #b3261e;
+      --error-bg: #fdecea;
+      --warn: #9a7d0a;
+      --warn-bg: #fff8e1;
+      --radius: 10px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    /* ── Login screen ── */
+    #loginScreen {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .login-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px 32px;
+      width: 100%;
+      max-width: 380px;
+      text-align: center;
+    }
+
+    .login-card h1 {
+      font-size: 20px;
+      margin: 0 0 6px;
+    }
+
+    .login-card p {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 0 0 24px;
+    }
+
+    .login-card input {
+      width: 100%;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 15px;
+      margin-bottom: 12px;
+    }
+
+    .login-card button {
+      width: 100%;
+      padding: 12px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .login-card button:hover {
+      background: var(--accent-hover);
+    }
+
+    #loginError {
+      color: var(--error);
+      font-size: 13px;
+      margin-top: 10px;
+      display: none;
+    }
+
+    /* ── App shell ── */
+    #app {
+      display: none;
+    }
+
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    header h1 {
+      font-size: 17px;
+      margin: 0;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+    }
+
+    header .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ccc;
+      margin-right: 6px;
+      flex-shrink: 0;
+    }
+
+    header .status-dot.ok {
+      background: #2ecc71;
+    }
+
+    header .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .usage-badges {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .usage-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .usage-badge .usage-source {
+      font-weight: 800;
+      color: var(--text);
+    }
+
+    .usage-badge .usage-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+      flex-shrink: 0;
+    }
+
+    .usage-badge.warn .usage-dot {
+      background: #d9a017;
+    }
+
+    .usage-badge.critical .usage-dot {
+      background: var(--error);
+    }
+
+    header .logout-btn {
+      background: none;
+      border: 1px solid var(--border);
+      padding: 7px 14px;
+      border-radius: 7px;
+      font-size: 13px;
+      cursor: pointer;
+      color: var(--muted);
+    }
+
+    .container {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 20px 16px 60px;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 20px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 4px;
+    }
+
+    .tab {
+      flex: 1;
+      text-align: center;
+      padding: 9px 8px;
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--muted);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .tab.active {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .panel {
+      display: none;
+    }
+
+    .panel.active {
+      display: block;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px;
+      margin-bottom: 16px;
+    }
+
+    .card h2 {
+      font-size: 15px;
+      margin: 0 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+
+    .field {
+      margin-bottom: 16px;
+    }
+
+    input[type="text"],
+    input[type="email"],
+    input[type="number"],
+    select,
+    textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: inherit;
+      background: #fff;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 100px;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .mode-toggle {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .mode-btn {
+      flex: 1;
+      padding: 9px;
+      text-align: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--muted);
+    }
+
+    .mode-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    .batch-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .batch-btn {
+      padding: 9px 4px;
+      text-align: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--muted);
+      background: #fff;
+    }
+
+    .batch-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    @media (max-width: 480px) {
+      .batch-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    .group-summary {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-top: 10px;
+      margin-bottom: 4px;
+      font-size: 12.5px;
+    }
+
+    .group-summary .gs-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .group-summary .gs-num {
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .group-summary .gs-label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .user-picker {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      max-height: 220px;
+      overflow-y: auto;
+      margin-top: 8px;
+    }
+
+    .user-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+
+    .user-row:last-child {
+      border-bottom: none;
+    }
+
+    .user-row .email {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+      flex-wrap: wrap;
+    }
+
+    button.primary,
+    button.secondary,
+    button.text-btn {
+      padding: 11px 18px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #fff;
+      flex: 1;
+      min-width: 160px;
+    }
+
+    button.primary:hover {
+      background: var(--accent-hover);
+    }
+
+    button.secondary {
+      background: #fff;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    button.text-btn {
+      background: none;
+      border: none;
+      padding: 6px 4px;
+      color: var(--muted);
+      text-decoration: underline;
+      font-weight: 600;
+      font-size: 12.5px;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .alert {
+      padding: 12px 14px;
+      border-radius: 8px;
+      font-size: 13px;
+      margin-top: 14px;
+      display: none;
+    }
+
+    .alert.success {
+      background: var(--success-bg);
+      color: var(--success);
+      display: block;
+    }
+
+    .alert.error {
+      background: var(--error-bg);
+      color: var(--error);
+      display: block;
+    }
+
+    .alert.warn {
+      background: var(--warn-bg);
+      color: var(--warn);
+      display: block;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 9px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .badge.completed {
+      background: var(--success-bg);
+      color: var(--success);
+    }
+
+    .badge.processing {
+      background: #fff8e1;
+      color: #9a7d0a;
+    }
+
+    .badge.failed {
+      background: var(--error-bg);
+      color: var(--error);
+    }
+
+    .badge.partial {
+      background: #fff3e0;
+      color: #b26a00;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat-box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      text-align: center;
+    }
+
+    .stat-box .num {
+      font-size: 22px;
+      font-weight: 800;
+    }
+
+    .stat-box .label {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .empty {
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 30px 0;
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #ffffff55;
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 14px 10px 50px;
+      }
+
+      .card {
+        padding: 16px;
+      }
+
+      .usage-badges {
+        width: 100%;
+        justify-content: flex-start;
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <!-- ───────── Login Screen ───────── -->
+  <div id="loginScreen">
+    <div class="login-card">
+      <h1>444Music Broadcast</h1>
+      <p>Enter your admin key to continue</p>
+      <input type="text" id="adminSecretInput" placeholder="Admin secret" autocomplete="off">
+      <button onclick="tryLogin()">Sign in</button>
+      <div id="loginError">Incorrect secret, or server unreachable.</div>
+    </div>
+  </div>
+
+  <!-- ───────── Main App ───────── -->
+  <div id="app">
+    <header>
+      <h1><span class="status-dot" id="statusDot"></span>444Music Broadcast</h1>
+      <div class="header-right">
+        <div class="usage-badges">
+          <div class="usage-badge" id="usageBadge">
+            <span class="usage-dot"></span>
+            <span class="usage-source">Brevo</span>
+            <span id="usageBadgeText">Loading...</span>
+          </div>
+          <div class="usage-badge" id="sendpulseUsageBadge">
+            <span class="usage-dot"></span>
+            <span class="usage-source">SendPulse</span>
+            <span id="sendpulseUsageBadgeText">Loading...</span>
+          </div>
+        </div>
+        <button class="logout-btn" onclick="logout()">Log out</button>
+      </div>
+    </header>
+
+    <div class="container">
+      <div class="tabs">
+        <div class="tab active" data-tab="compose" onclick="switchTab('compose')">Compose</div>
+        <div class="tab" data-tab="history" onclick="switchTab('history')">History</div>
+        <div class="tab" data-tab="stats" onclick="switchTab('stats')">Stats</div>
+      </div>
+
+      <!-- COMPOSE PANEL -->
+      <div class="panel active" id="panel-compose">
+
+        <div class="card">
+          <h2>Rollout (campaign group)</h2>
+          <div class="hint" style="margin-top:-8px; margin-bottom:14px;">
+            Optional. Use this to send the same campaign to a fresh batch of users
+            each day, without ever re-sending to someone who already got it.
+          </div>
+
+          <div class="field">
+            <label>Campaign group</label>
+            <select id="groupSelect" onchange="onGroupChange()">
+              <option value="">No group — one-time send</option>
+            </select>
+          </div>
+
+          <div id="newGroupFields" style="display:none;">
+            <div class="field">
+              <label>New rollout name</label>
+              <input type="text" id="newGroupNameInput" placeholder="e.g. July Release Announcement">
+            </div>
+            <button class="secondary" onclick="createGroup()" id="createGroupBtn">Create rollout</button>
+          </div>
+
+          <div id="groupSummary" style="display:none;" class="group-summary">
+            <div class="gs-item">
+              <span class="gs-num" id="gsSent">0</span>
+              <span class="gs-label">Already sent</span>
+            </div>
+            <div class="gs-item">
+              <span class="gs-num" id="gsRemaining">0</span>
+              <span class="gs-label">Not yet sent</span>
+            </div>
+            <div class="gs-item">
+              <span class="gs-num" id="gsTotal">0</span>
+              <span class="gs-label">Total opted-in</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Message</h2>
+
+          <div class="mode-toggle">
+            <div class="mode-btn active" id="modeTemplateBtn" onclick="setMode('template')">Use a template</div>
+            <div class="mode-btn" id="modeCustomBtn" onclick="setMode('custom')">Write custom</div>
+          </div>
+
+          <div class="field">
+            <label>Subject</label>
+            <input type="text" id="subjectInput" placeholder="e.g. New release is live!">
+          </div>
+
+          <div id="templateFields">
+            <div class="field">
+              <label>Template</label>
+              <select id="templateSelect">
+                <option value="welcome">Welcome</option>
+                <option value="announcement">Announcement</option>
+                <option value="newsletter">Newsletter</option>
+                <option value="promotion">Promotion</option>
+                <option value="releaseUpdate">Release Update</option>
+                <option value="playlistFeature">Playlist Feature</option>
+                <option value="distributionUpdate">Distribution Update</option>
+              </select>
+              <div class="hint">Personalization tokens {{name}}, {{email}}, {{country}} are applied automatically.</div>
+            </div>
+          </div>
+
+          <div id="customFields" style="display:none;">
+            <div class="field">
+              <label>Custom HTML</label>
+              <textarea id="rawHtmlInput" placeholder="<p>Hello {{name}}!</p>"></textarea>
+            </div>
+            <div class="field">
+              <label>Plain text version (optional)</label>
+              <textarea id="rawTextInput" placeholder="Hello {{name}}!"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Recipients</h2>
+          <div class="field">
+            <label>Send to</label>
+            <select id="sendToSelect" onchange="onSendToChange()">
+              <option value="all">All eligible users</option>
+              <option value="selected">Select specific users</option>
+            </select>
+            <div class="hint" id="sendToHint" style="display:none;">
+              When a rollout is selected, only users who haven't received it yet are eligible.
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Batch size</label>
+            <div class="batch-grid">
+              <div class="batch-btn" data-size="50" onclick="setBatchSize(50)">50</div>
+              <div class="batch-btn" data-size="100" onclick="setBatchSize(100)">100</div>
+              <div class="batch-btn active" data-size="150" onclick="setBatchSize(150)">150</div>
+              <div class="batch-btn" data-size="200" onclick="setBatchSize(200)">200</div>
+              <div class="batch-btn" data-size="custom" onclick="setBatchSize('custom')">Custom</div>
+            </div>
+            <input type="number" id="customBatchInput" placeholder="Enter custom amount" style="display:none;" min="1">
+            <div class="hint">
+              For "All eligible users", this caps how many are sent to at once. Used together with a
+              rollout, this lets you send to 150 today and the remaining users tomorrow.
+            </div>
+          </div>
+
+          <div id="userPickerWrap" style="display:none;">
+            <input type="text" id="userSearch" placeholder="Search by name or email..." oninput="renderUserList()">
+            <div class="user-picker" id="userPicker"></div>
+            <div class="hint" id="selectedCountHint">0 selected</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Send a test first</h2>
+          <div class="field">
+            <label>Your email</label>
+            <input type="email" id="testEmailInput" placeholder="you@example.com">
+          </div>
+          <button class="secondary" onclick="sendTest()" id="testBtn">Send test email</button>
+          <div class="alert" id="testAlert"></div>
+        </div>
+
+        <div class="btn-row">
+          <button class="primary" onclick="sendBroadcast()" id="broadcastBtn">Send Broadcast</button>
+        </div>
+        <div class="alert" id="broadcastAlert"></div>
+      </div>
+
+      <!-- HISTORY PANEL -->
+      <div class="panel" id="panel-history">
+        <div class="card">
+          <h2>Recent campaigns</h2>
+          <div id="historyContent" class="empty">Loading...</div>
+        </div>
+      </div>
+
+      <!-- STATS PANEL -->
+      <div class="panel" id="panel-stats">
+        <div id="statsContent" class="empty">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let ADMIN_SECRET = '';
+    let ALL_USERS = [];          // full opted-in pool, or group's remaining pool
+    let SELECTED_UIDS = new Set();
+    let CURRENT_MODE = 'template';
+    let CURRENT_GROUP_ID = '';
+    let ALL_GROUPS = [];
+    let BATCH_SIZE = 150;
+
+    // ── Auth ──
+    function apiHeaders() {
+      return {
+        'Content-Type': 'application/json',
+        'x-admin-secret': ADMIN_SECRET,
+      };
+    }
+
+    async function tryLogin() {
+      const val = document.getElementById('adminSecretInput').value.trim();
+      if (!val) return;
+      ADMIN_SECRET = val;
+
+      try {
+        const res = await fetch('/api/admin/statistics', { headers: apiHeaders() });
+        if (!res.ok) throw new Error('bad secret');
+        sessionStorage.setItem('adminSecret', ADMIN_SECRET);
+        document.getElementById('loginScreen').style.display = 'none';
+        document.getElementById('app').style.display = 'block';
+        document.getElementById('statusDot').classList.add('ok');
+        loadUsers();
+        loadHistory();
+        loadStats();
+        loadGroups();
+        loadEmailUsage();
+        loadSendpulseEmailUsage();
+      } catch (err) {
+        document.getElementById('loginError').style.display = 'block';
+      }
+    }
+
+    function logout() {
+      sessionStorage.removeItem('adminSecret');
+      location.reload();
+    }
+
+    window.addEventListener('load', () => {
+      const saved = sessionStorage.getItem('adminSecret');
+      if (saved) {
+        document.getElementById('adminSecretInput').value = saved;
+        tryLogin();
+      }
+    });
+
+    // ── Tabs ──
+    function switchTab(name) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      document.getElementById('panel-' + name).classList.add('active');
+      if (name === 'history') loadHistory();
+      if (name === 'stats') loadStats();
+    }
+
+    // ── Brevo email usage badge (daily) ──
+    async function loadEmailUsage() {
+      try {
+        const res = await fetch('/api/admin/email-usage', { headers: apiHeaders() });
+        const data = await res.json();
+        if (!data.success) return;
+
+        const badge = document.getElementById('usageBadge');
+        const text = document.getElementById('usageBadgeText');
+        text.textContent = `${data.sent}/${data.limit} today · ${data.remaining} left · resets in ${data.resetsInText}`;
+
+        badge.classList.remove('warn', 'critical');
+        if (data.remaining <= 20) {
+          badge.classList.add('critical');
+        } else if (data.remaining <= 100) {
+          badge.classList.add('warn');
+        }
+      } catch (err) {
+        console.error('Failed to load Brevo email usage', err);
+        document.getElementById('usageBadgeText').textContent = 'Unavailable';
+      }
+    }
+
+    // ── SendPulse email usage badge (monthly) ──
+    // Hits a new admin route — GET /api/admin/sendpulse-usage — which should
+    // call sendpulseProvider.getUsageSummary() server-side and return
+    // { success, sent, limit, remaining, resetsInText } for the CURRENT
+    // CALENDAR MONTH, mirroring the shape /api/admin/email-usage already
+    // returns for Brevo's daily count. Add that route + wire it to
+    // sendpulseUsageTracker before this will show real numbers.
+    async function loadSendpulseEmailUsage() {
+      try {
+        const res = await fetch('/api/admin/sendpulse-usage', { headers: apiHeaders() });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.message || 'failed');
+
+        const badge = document.getElementById('sendpulseUsageBadge');
+        const text = document.getElementById('sendpulseUsageBadgeText');
+        text.textContent = `${data.sent}/${data.limit} this month · ${data.remaining} left · resets in ${data.resetsInText}`;
+
+        badge.classList.remove('warn', 'critical');
+        if (data.remaining <= 200) {
+          badge.classList.add('critical');
+        } else if (data.remaining <= 1000) {
+          badge.classList.add('warn');
+        }
+      } catch (err) {
+        console.error('Failed to load SendPulse email usage', err);
+        document.getElementById('sendpulseUsageBadgeText').textContent = 'Unavailable';
+      }
+    }
+
+    // ── Campaign groups ──
+    async function loadGroups() {
+      try {
+        const res = await fetch('/api/admin/campaign-groups', { headers: apiHeaders() });
+        const data = await res.json();
+        ALL_GROUPS = data.groups || [];
+        renderGroupSelect();
+      } catch (err) {
+        console.error('Failed to load campaign groups', err);
+      }
+    }
+
+    function renderGroupSelect() {
+      const select = document.getElementById('groupSelect');
+      const currentVal = select.value;
+      select.innerHTML = '<option value="">No group — one-time send</option>' +
+        ALL_GROUPS.map(g => `<option value="${g.id}">${g.name} (${g.sentCount} sent, ${g.remainingCount} left)</option>`).join('') +
+        '<option value="__new__">+ Create new rollout...</option>';
+      select.value = currentVal || '';
+    }
+
+    function onGroupChange() {
+      const val = document.getElementById('groupSelect').value;
+
+      if (val === '__new__') {
+        document.getElementById('newGroupFields').style.display = 'block';
+        document.getElementById('groupSummary').style.display = 'none';
+        document.getElementById('groupSelect').value = CURRENT_GROUP_ID;
+        return;
+      }
+
+      document.getElementById('newGroupFields').style.display = 'none';
+      CURRENT_GROUP_ID = val;
+
+      const sendToHint = document.getElementById('sendToHint');
+
+      if (!val) {
+        document.getElementById('groupSummary').style.display = 'none';
+        sendToHint.style.display = 'none';
+        loadUsers(); // reset to full opted-in pool
+        return;
+      }
+
+      const group = ALL_GROUPS.find(g => g.id === val);
+      if (group) {
+        document.getElementById('groupSummary').style.display = 'flex';
+        document.getElementById('gsSent').textContent = group.sentCount;
+        document.getElementById('gsRemaining').textContent = group.remainingCount;
+        document.getElementById('gsTotal').textContent = group.totalOptedIn;
+      }
+      sendToHint.style.display = 'block';
+
+      loadRemainingUsersForGroup(val);
+    }
+
+    async function createGroup() {
+      const nameInput = document.getElementById('newGroupNameInput');
+      const name = nameInput.value.trim();
+      if (!name) {
+        alert('Enter a rollout name.');
+        return;
+      }
+
+      const btn = document.getElementById('createGroupBtn');
+      btn.disabled = true;
+      btn.textContent = 'Creating...';
+
+      try {
+        const res = await fetch('/api/admin/campaign-groups', {
+          method: 'POST',
+          headers: apiHeaders(),
+          body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          nameInput.value = '';
+          document.getElementById('newGroupFields').style.display = 'none';
+          await loadGroups();
+          document.getElementById('groupSelect').value = data.groupId;
+          onGroupChange();
+        } else {
+          alert(data.message || 'Failed to create rollout.');
+        }
+      } catch (err) {
+        alert('Network error creating rollout.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Create rollout';
+      }
+    }
+
+    async function loadRemainingUsersForGroup(groupId) {
+      const wrap = document.getElementById('userPicker');
+      if (document.getElementById('sendToSelect').value === 'selected') {
+        wrap.innerHTML = '<div class="empty">Loading eligible users...</div>';
+      }
+      try {
+        const res = await fetch(`/api/admin/campaign-groups/${groupId}/remaining-users`, { headers: apiHeaders() });
+        const data = await res.json();
+        ALL_USERS = data.users || [];
+        SELECTED_UIDS = new Set(); // clear stale selections from a different pool
+        renderUserList();
+      } catch (err) {
+        console.error('Failed to load remaining users for group', err);
+      }
+    }
+
+    // ── Compose mode ──
+    function setMode(mode) {
+      CURRENT_MODE = mode;
+      document.getElementById('modeTemplateBtn').classList.toggle('active', mode === 'template');
+      document.getElementById('modeCustomBtn').classList.toggle('active', mode === 'custom');
+      document.getElementById('templateFields').style.display = mode === 'template' ? 'block' : 'none';
+      document.getElementById('customFields').style.display = mode === 'custom' ? 'block' : 'none';
+    }
+
+    function onSendToChange() {
+      const val = document.getElementById('sendToSelect').value;
+      document.getElementById('userPickerWrap').style.display = val === 'selected' ? 'block' : 'none';
+      if (val === 'selected') renderUserList();
+    }
+
+    // ── Batch size ──
+    function setBatchSize(size) {
+      document.querySelectorAll('.batch-btn').forEach(b => b.classList.toggle('active', String(b.dataset.size) === String(size)));
+      const customInput = document.getElementById('customBatchInput');
+
+      if (size === 'custom') {
+        customInput.style.display = 'block';
+        customInput.focus();
+        BATCH_SIZE = parseInt(customInput.value, 10) || 0;
+      } else {
+        customInput.style.display = 'none';
+        BATCH_SIZE = size;
+      }
+    }
+
+    document.getElementById('customBatchInput').addEventListener('input', (e) => {
+      BATCH_SIZE = parseInt(e.target.value, 10) || 0;
+    });
+
+    // ── Users ──
+    async function loadUsers() {
+      try {
+        const res = await fetch('/api/admin/users', { headers: apiHeaders() });
+        const data = await res.json();
+        ALL_USERS = data.users || [];
+        renderUserList();
+      } catch (err) {
+        console.error('Failed to load users', err);
+      }
+    }
+
+    // FIXED — the picker now hides two categories of noise:
+    //   1. Users with no real name on file (previously shown with the
+    //      generic "Artist" fallback label — these are accounts whose
+    //      Firestore doc never got a `name` field written, e.g. from the
+    //      old Google Sign-In race condition).
+    //   2. Duplicate accounts sharing the same email (Firebase Auth allows
+    //      separate uids for the same email across different sign-in
+    //      methods, e.g. one email/password account + one Google account).
+    // This is display-only — ALL_USERS itself is untouched, so nothing
+    // about who's eligible to actually receive a broadcast changes.
+    function renderUserList() {
+      const q = document.getElementById('userSearch').value.toLowerCase();
+
+      const named = ALL_USERS.filter(u => (u.displayName || '').trim().length > 0);
+
+      const seenEmails = new Set();
+      const deduped = named.filter(u => {
+        const key = (u.email || '').toLowerCase().trim();
+        if (!key || seenEmails.has(key)) return false;
+        seenEmails.add(key);
+        return true;
+      });
+
+      const hiddenCount = ALL_USERS.length - deduped.length;
+
+      const filtered = deduped.filter(u =>
+        (u.displayName || '').toLowerCase().includes(q) ||
+        (u.email || '').toLowerCase().includes(q)
+      );
+
+      const wrap = document.getElementById('userPicker');
+      if (filtered.length === 0) {
+        wrap.innerHTML = '<div class="empty">No eligible users found.</div>';
+        document.getElementById('selectedCountHint').textContent = `${SELECTED_UIDS.size} selected`;
+        return;
+      }
+      wrap.innerHTML = filtered.map(u => `
+        <label class="user-row">
+          <input type="checkbox" value="${u.uid}" ${SELECTED_UIDS.has(u.uid) ? 'checked' : ''} onchange="toggleUser('${u.uid}')">
+          <span>${u.displayName} <span class="email">${u.email || ''}</span></span>
+        </label>
+      `).join('');
+      document.getElementById('selectedCountHint').textContent =
+        `${SELECTED_UIDS.size} selected${hiddenCount > 0 ? ` · ${hiddenCount} hidden (no name / duplicate)` : ''}`;
+    }
+
+    function toggleUser(uid) {
+      if (SELECTED_UIDS.has(uid)) SELECTED_UIDS.delete(uid);
+      else SELECTED_UIDS.add(uid);
+      document.getElementById('selectedCountHint').textContent = `${SELECTED_UIDS.size} selected`;
+    }
+
+    // ── Build message payload ──
+    function buildMessagePayload() {
+      const subject = document.getElementById('subjectInput').value.trim();
+      if (!subject) {
+        alert('Please enter a subject.');
+        return null;
+      }
+
+      const payload = { subject };
+
+      if (CURRENT_MODE === 'template') {
+        payload.templateKey = document.getElementById('templateSelect').value;
+      } else {
+        const html = document.getElementById('rawHtmlInput').value.trim();
+        if (!html) {
+          alert('Please enter custom HTML content.');
+          return null;
+        }
+        payload.rawHtml = html;
+        payload.rawText = document.getElementById('rawTextInput').value.trim();
+      }
+
+      return payload;
+    }
+
+    // ── Send test ──
+    async function sendTest() {
+      const email = document.getElementById('testEmailInput').value.trim();
+      const alertBox = document.getElementById('testAlert');
+      alertBox.className = 'alert';
+
+      if (!email) {
+        alertBox.className = 'alert error';
+        alertBox.textContent = 'Enter your email first.';
+        return;
+      }
+
+      const msg = buildMessagePayload();
+      if (!msg) return;
+
+      const btn = document.getElementById('testBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Sending...';
+
+      try {
+        const res = await fetch('/api/admin/test-email', {
+          method: 'POST',
+          headers: apiHeaders(),
+          body: JSON.stringify({ ...msg, email }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          alertBox.className = 'alert success';
+          alertBox.textContent = 'Test email sent — check your inbox.';
+        } else if (data.result && (data.result.error === 'DAILY_EMAIL_LIMIT_REACHED' || data.result.error === 'MONTHLY_EMAIL_LIMIT_REACHED')) {
+          alertBox.className = 'alert warn';
+          alertBox.textContent = data.result.error === 'MONTHLY_EMAIL_LIMIT_REACHED'
+            ? "This month's SendPulse email limit has been reached. Try again after the reset."
+            : "Today's 300-email limit has been reached. Try again after the reset.";
+        } else {
+          alertBox.className = 'alert error';
+          alertBox.textContent = data.message || 'Failed to send test email.';
+        }
+        loadEmailUsage();
+        loadSendpulseEmailUsage();
+      } catch (err) {
+        alertBox.className = 'alert error';
+        alertBox.textContent = 'Network error — is the server running?';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send test email';
+      }
+    }
+
+    // ── Send broadcast ──
+    async function sendBroadcast() {
+      const msg = buildMessagePayload();
+      if (!msg) return;
+
+      const sendTo = document.getElementById('sendToSelect').value;
+
+      // Resolve the working pool: either the full/group-filtered ALL_USERS
+      // (for "all eligible"), or the checked SELECTED_UIDS (for "selected").
+      let targetUids = [];
+
+      if (sendTo === 'selected') {
+        if (SELECTED_UIDS.size === 0) {
+          alert('Select at least one user.');
+          return;
+        }
+        targetUids = Array.from(SELECTED_UIDS);
+      } else {
+        targetUids = ALL_USERS.map(u => u.uid);
+      }
+
+      if (targetUids.length === 0) {
+        alert('No eligible users to send to. If a rollout is selected, everyone may have already received it.');
+        return;
+      }
+
+      // Apply batch size cap
+      const batchSize = BATCH_SIZE > 0 ? BATCH_SIZE : targetUids.length;
+      if (batchSize < targetUids.length) {
+        targetUids = targetUids.slice(0, batchSize);
+      }
+
+      msg.sendTo = 'selected';
+      msg.selectedUserIds = targetUids;
+      if (CURRENT_GROUP_ID) {
+        msg.campaignGroupId = CURRENT_GROUP_ID;
+      }
+
+      const groupName = CURRENT_GROUP_ID ? (ALL_GROUPS.find(g => g.id === CURRENT_GROUP_ID) || {}).name : null;
+      const confirmMsg = groupName
+        ? `Send this batch of ${targetUids.length} user(s) under rollout "${groupName}"?`
+        : `Send this broadcast to ${targetUids.length} user(s)? This cannot be undone.`;
+      if (!confirm(confirmMsg)) return;
+
+      const alertBox = document.getElementById('broadcastAlert');
+      alertBox.className = 'alert';
+      const btn = document.getElementById('broadcastBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Sending...';
+
+      try {
+        const res = await fetch('/api/admin/broadcast', {
+          method: 'POST',
+          headers: apiHeaders(),
+          body: JSON.stringify(msg),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          alertBox.className = 'alert success';
+          alertBox.textContent = `Broadcast accepted — ${data.recipientCount} recipient(s). Campaign ID: ${data.campaignId}`;
+          loadHistory();
+          loadEmailUsage();
+          loadSendpulseEmailUsage();
+          if (CURRENT_GROUP_ID) {
+            setTimeout(() => { loadGroups(); }, 2000); // give the async send a moment to finish updating the group
+          }
+        } else {
+          alertBox.className = 'alert error';
+          alertBox.textContent = data.message || 'Failed to send broadcast.';
+        }
+      } catch (err) {
+        alertBox.className = 'alert error';
+        alertBox.textContent = 'Network error — is the server running?';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send Broadcast';
+      }
+    }
+
+    // ── History ──
+    async function loadHistory() {
+      const el = document.getElementById('historyContent');
+      el.className = 'empty';
+      el.textContent = 'Loading...';
+      try {
+        const res = await fetch('/api/admin/campaigns?limit=30', { headers: apiHeaders() });
+        const data = await res.json();
+        const campaigns = data.campaigns || [];
+        if (campaigns.length === 0) {
+          el.textContent = 'No campaigns sent yet.';
+          return;
+        }
+        el.className = '';
+        el.innerHTML = `
+          <table>
+            <thead>
+              <tr><th>Subject</th><th>Sent to</th><th>Recipients</th><th>Success</th><th>Status</th><th>Date</th></tr>
+            </thead>
+            <tbody>
+              ${campaigns.map(c => `
+                <tr>
+                  <td>${c.subject || '-'}</td>
+                  <td>${c.sendTo || '-'}</td>
+                  <td>${c.recipientCount ?? '-'}</td>
+                  <td>${c.successfulSends ?? 0}/${c.recipientCount ?? 0}</td>
+                  <td><span class="badge ${c.status}">${c.status}</span></td>
+                  <td>${c.createdAt ? new Date(c.createdAt).toLocaleDateString() : '-'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      } catch (err) {
+        el.textContent = 'Failed to load campaign history.';
+      }
+    }
+
+    // ── Stats ──
+    async function loadStats() {
+      const el = document.getElementById('statsContent');
+      el.className = 'empty';
+      el.textContent = 'Loading...';
+      try {
+        const res = await fetch('/api/admin/statistics', { headers: apiHeaders() });
+        const data = await res.json();
+        const s = data.statistics || {};
+        el.className = '';
+        el.innerHTML = `
+          <div class="stat-grid">
+            <div class="stat-box"><div class="num">${s.totalCampaigns ?? 0}</div><div class="label">Campaigns</div></div>
+            <div class="stat-box"><div class="num">${s.totalEmailsSent ?? 0}</div><div class="label">Emails sent</div></div>
+            <div class="stat-box"><div class="num">${s.successRate ?? 0}%</div><div class="label">Success rate</div></div>
+            <div class="stat-box"><div class="num">${s.failureRate ?? 0}%</div><div class="label">Failure rate</div></div>
+          </div>
+          <div class="card">
+            <h2>Last campaign</h2>
+            ${s.lastCampaign
+              ? `<p><strong>${s.lastCampaign.subject}</strong><br>
+                 ${s.lastCampaign.successfulSends}/${s.lastCampaign.recipientCount} sent successfully</p>`
+              : '<div class="empty">No campaigns yet.</div>'}
+          </div>
+        `;
+      } catch (err) {
+        el.textContent = 'Failed to load statistics.';
+      }
+    }
+  </script>
+
+</body>
+
+</html>

@@ -2,19 +2,52 @@
  * services/queueService.js
  *
  * Batches recipients and sends personalized emails through
- * emailProvider.js, in configurable batch sizes with a delay between
- * batches (default: 50 emails every 3 seconds, from .env).
+ * sendpulseProvider.js, in configurable batch sizes with a delay
+ * between batches.
  *
- * This module never talks to a specific email provider directly —
- * it only calls the generic sendEmail()/sendBulk() methods from
- * services/emailProvider.js. If you swap providers later, this file
- * never needs to change.
+ * BROADCAST-ONLY: this file is exclusively for broadcast sends and
+ * talks to sendpulseProvider.js instead of emailProvider.js (Brevo).
+ * Brevo/emailProvider.js remains untouched and is still used directly
+ * by verificationController.js and submissionController.js for
+ * OTP/verification and submission emails — this switch does not
+ * affect those flows at all.
+ *
+ * ── RATE-SAFE BATCH PACING ──
+ * The active provider's rate limits determine how batches are paced:
+ *   - Brevo:     fast batches, short delay (no meaningful hourly cap
+ *                for this use case)
+ *   - SendPulse: free SMTP plan caps at 50 emails/HOUR, so batches
+ *                must be spaced ~65 minutes apart. Getting this wrong
+ *                for a broadcast bigger than 50 people means most
+ *                recipients past #50 would fail/bounce.
+ * getQueueDefaults() below inspects emailProvider.getProviderName()
+ * and returns the correct pacing automatically — nothing needs to be
+ * set manually per broadcast.
+ *
+ * ── CHECKPOINTING (crash/restart safety) ──
+ * Every batch, once it finishes sending, immediately records its
+ * successfully-attempted recipient UIDs into the campaign's Firestore
+ * record via campaignService.appendSentUids(). This happens batch by
+ * batch, not just once at the very end — so if the server process
+ * restarts mid-broadcast (e.g. an hourly-paced SendPulse send that
+ * takes 5+ hours to fully complete), the campaign record on disk
+ * always reflects exactly who has already received the email, even
+ * if the in-memory loop that was driving the send is gone.
+ *
+ * NOTE: this checkpointing does NOT automatically resume a broadcast
+ * after a restart — the admin still needs to re-trigger a send for
+ * the remaining recipients. What it guarantees is that the record of
+ * who already got it is never lost, so a manual resend can safely
+ * exclude them (e.g. by using the Campaign Group / rollout feature,
+ * whose remaining-users endpoint already does exactly this kind of
+ * exclusion).
  */
 
-const emailProvider = require('./emailProvider');
+const emailProvider = require('./sendpulseProvider');
 const templateService = require('./templateService');
+const campaignService = require('./campaignService');
 const logger = require('../utils/logger');
-const { QUEUE_DEFAULTS } = require('../config/constants');
+const { QUEUE_DEFAULTS, SENDPULSE_QUEUE_DEFAULTS } = require('../config/constants');
 
 /**
  * Pauses execution for the given number of milliseconds.
@@ -40,8 +73,27 @@ function chunkArray(arr, size) {
 }
 
 /**
+ * Picks safe batch size/delay defaults based on which provider is
+ * actually active, so callers never have to remember to configure
+ * this per broadcast.
+ * @returns {{ BATCH_SIZE: number, BATCH_DELAY_MS: number }}
+ */
+function getQueueDefaults() {
+  const providerName = typeof emailProvider.getProviderName === 'function'
+    ? emailProvider.getProviderName()
+    : '';
+
+  if (providerName === 'sendpulse') {
+    return SENDPULSE_QUEUE_DEFAULTS;
+  }
+
+  return QUEUE_DEFAULTS;
+}
+
+/**
  * Processes the full broadcast: renders personalized content for each
  * recipient, then sends in batches with a delay between each batch.
+ * Checkpoints sent UIDs into the campaign record after every batch.
  *
  * @param {Object} options
  * @param {Array<Object>} options.recipients - array of user objects (uid, displayName, email, country)
@@ -50,9 +102,10 @@ function chunkArray(arr, size) {
  * @param {string} [options.rawHtml] - used if no templateKey
  * @param {string} [options.rawText] - used if no templateKey
  * @param {Object} [options.templateData] - extra fields passed into the template function
- * @param {number} [options.batchSize] - overrides QUEUE_DEFAULTS.BATCH_SIZE
- * @param {number} [options.batchDelayMs] - overrides QUEUE_DEFAULTS.BATCH_DELAY_MS
- * @param {Function} [options.onBatchComplete] - optional callback(batchResults) called after each batch, useful for live progress logging
+ * @param {string} [options.campaignId] - if provided, sent UIDs are checkpointed into this campaign after every batch
+ * @param {number} [options.batchSize] - overrides the provider's default batch size
+ * @param {number} [options.batchDelayMs] - overrides the provider's default batch delay
+ * @param {Function} [options.onBatchComplete] - optional callback(batchResults, batchIndex, totalBatches) called after each batch, useful for live progress logging
  *
  * @returns {Promise<{ total: number, successful: number, failed: number, results: Array }>}
  */
@@ -63,23 +116,29 @@ async function processBroadcast({
   rawHtml,
   rawText,
   templateData = {},
-  batchSize = QUEUE_DEFAULTS.BATCH_SIZE,
-  batchDelayMs = QUEUE_DEFAULTS.BATCH_DELAY_MS,
+  campaignId = null,
+  batchSize,
+  batchDelayMs,
   onBatchComplete,
 }) {
   if (!Array.isArray(recipients) || recipients.length === 0) {
     return { total: 0, successful: 0, failed: 0, results: [] };
   }
 
-  const batches = chunkArray(recipients, batchSize);
+  const defaults = getQueueDefaults();
+  const effectiveBatchSize = batchSize || defaults.BATCH_SIZE;
+  const effectiveBatchDelayMs = typeof batchDelayMs === 'number' ? batchDelayMs : defaults.BATCH_DELAY_MS;
+
+  const batches = chunkArray(recipients, effectiveBatchSize);
   const allResults = [];
   let successful = 0;
   let failed = 0;
 
   logger.info(
     `Starting broadcast: ${recipients.length} recipients, ` +
-    `${batches.length} batch(es) of up to ${batchSize}, ` +
-    `${batchDelayMs}ms delay between batches.`
+    `${batches.length} batch(es) of up to ${effectiveBatchSize}, ` +
+    `${effectiveBatchDelayMs}ms delay between batches ` +
+    `(provider: ${typeof emailProvider.getProviderName === 'function' ? emailProvider.getProviderName() : 'unknown'}).`
   );
 
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
@@ -107,6 +166,8 @@ async function processBroadcast({
     // Send this batch via the provider-agnostic adapter.
     const batchResults = await emailProvider.sendBulk(messages);
 
+    const batchAttemptedUids = [];
+
     batchResults.forEach((result, i) => {
       const record = {
         uid: messages[i].uid,
@@ -116,6 +177,7 @@ async function processBroadcast({
         error: result.error || null,
       };
       allResults.push(record);
+      batchAttemptedUids.push(record.uid);
 
       if (result.success) {
         successful++;
@@ -130,14 +192,28 @@ async function processBroadcast({
       `${batchResults.filter((r) => !r.success).length} failed.`
     );
 
+    // ── Checkpoint: record this batch's attempted UIDs immediately,
+    // not just at the very end. This is what makes a mid-broadcast
+    // server restart safe — the campaign record always reflects
+    // exactly which batches actually went out.
+    if (campaignId) {
+      try {
+        await campaignService.appendSentUids(campaignId, batchAttemptedUids);
+      } catch (err) {
+        logger.error(
+          `Failed to checkpoint batch ${batchIndex + 1}/${batches.length} for campaign ${campaignId}: ${err.message}`
+        );
+      }
+    }
+
     if (typeof onBatchComplete === 'function') {
       onBatchComplete(batchResults, batchIndex, batches.length);
     }
 
     // Delay before the next batch (skip delay after the very last batch).
     const isLastBatch = batchIndex === batches.length - 1;
-    if (!isLastBatch && batchDelayMs > 0) {
-      await delay(batchDelayMs);
+    if (!isLastBatch && effectiveBatchDelayMs > 0) {
+      await delay(effectiveBatchDelayMs);
     }
   }
 
@@ -156,4 +232,5 @@ async function processBroadcast({
 
 module.exports = {
   processBroadcast,
+  getQueueDefaults,
 };

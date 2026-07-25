@@ -1,12 +1,58 @@
 /**
  * config/constants.js
  *
- * Centralized constants used across the broadcast backend.
- * Keeping these in one place means sendTo options, batch settings,
- * and template keys are never hardcoded/duplicated in multiple files.
+ * ── COLLECTIONS ──
+ * Firestore collection names, referenced across services so a typo'd
+ * collection name is a single-place fix, not a hunt-and-replace.
+ *   USERS           -> your existing "users" collection (userService.js)
+ *   EMAIL_CAMPAIGNS -> broadcast campaign history (campaignService.js)
+ *
+ * ── CAMPAIGN_STATUS ──
+ * String values written to a campaign document's `status` field.
+ * These match the CSS badge classes in admin.html exactly
+ * (.badge.completed / .badge.processing / .badge.failed / .badge.partial),
+ * so changing these values requires updating admin.html's styles too.
+ *
+ * ── SEND_TO ──
+ * Values for the "sendTo" targeting option, used by userService.js's
+ * getRecipients() switch statement. ALL/SELECTED match the values
+ * admin.html's <select id="sendToSelect"> actually sends ("all" /
+ * "selected"). PREMIUM/FREE are supported by userService.js for
+ * future use even though the current admin.html UI doesn't expose
+ * them as a picker option yet.
+ *
+ * ── SUBSCRIPTION_TIERS ──
+ * Values matched against a user's `subscription` field, used by
+ * userService.js's PREMIUM/FREE filtering and as the default fallback
+ * when a user document has no subscription field at all.
+ *
+ * ── TEMPLATE_KEYS ──
+ * Valid values for a broadcast's `templateKey` field, used by
+ * middleware/validators.js to reject unknown template names before
+ * they reach the controller. Matches the <option> values in
+ * admin.html's "Template" <select> exactly — if you add a new
+ * template there, add its key here too or validation will reject it.
+ *
+ * ── QUEUE_DEFAULTS / SENDPULSE_QUEUE_DEFAULTS ──
+ * See queueService.js — picks between these two based on which
+ * broadcast provider is active. SendPulse's free SMTP plan enforces a
+ * hard 50-emails-per-hour cap (separate from its 12,000/month total),
+ * so its batches must be spaced ~65 minutes apart, unlike Brevo which
+ * has no meaningful hourly cap for this use case.
  */
 
-// ── Recipient targeting options for POST /api/admin/broadcast ──
+const COLLECTIONS = {
+  USERS: 'users',
+  EMAIL_CAMPAIGNS: 'emailCampaigns',
+};
+
+const CAMPAIGN_STATUS = {
+  PROCESSING: 'processing',
+  COMPLETED: 'completed',
+  FAILED: 'failed',
+  PARTIAL: 'partial',
+};
+
 const SEND_TO = {
   ALL: 'all',
   PREMIUM: 'premium',
@@ -14,18 +60,11 @@ const SEND_TO = {
   SELECTED: 'selected',
 };
 
-const VALID_SEND_TO_VALUES = Object.values(SEND_TO);
-
-// ── Campaign status values (stored in Firestore "emailCampaigns") ──
-const CAMPAIGN_STATUS = {
-  PROCESSING: 'processing',
-  COMPLETED: 'completed',
-  FAILED: 'failed',
-  PARTIAL: 'partial', // completed but some sends failed
+const SUBSCRIPTION_TIERS = {
+  PREMIUM: 'premium',
+  FREE: 'free',
 };
 
-// ── Available email templates ──
-// Keys map directly to filenames in /templates
 const TEMPLATE_KEYS = {
   WELCOME: 'welcome',
   ANNOUNCEMENT: 'announcement',
@@ -36,46 +75,22 @@ const TEMPLATE_KEYS = {
   DISTRIBUTION_UPDATE: 'distributionUpdate',
 };
 
-const VALID_TEMPLATE_KEYS = Object.values(TEMPLATE_KEYS);
-
-// ── Firestore collection names ──
-const COLLECTIONS = {
-  USERS: 'users',
-  EMAIL_CAMPAIGNS: 'emailCampaigns',
-};
-
-// ── Subscription tiers (matches existing "subscription" field on user docs) ──
-const SUBSCRIPTION_TIERS = {
-  PREMIUM: 'premium',
-  FREE: 'free',
-};
-
-// ── Batch/queue defaults (overridden by .env if present) ──
 const QUEUE_DEFAULTS = {
-  BATCH_SIZE: parseInt(process.env.BATCH_SIZE, 10) || 50,
-  BATCH_DELAY_MS: parseInt(process.env.BATCH_DELAY_MS, 10) || 3000,
+  BATCH_SIZE: 50,
+  BATCH_DELAY_MS: 3000, // 3 seconds — fine for Brevo's rate limits
 };
 
-// ── Rate limiting defaults ──
-const RATE_LIMIT = {
-  WINDOW_MS: 15 * 60 * 1000, // 15 minutes
-  MAX_REQUESTS: 100, // general API requests per window per IP
-  BROADCAST_WINDOW_MS: 60 * 60 * 1000, // 1 hour
-  BROADCAST_MAX_REQUESTS: 5, // max broadcasts per hour per IP (prevents accidental spam-fires)
+const SENDPULSE_QUEUE_DEFAULTS = {
+  BATCH_SIZE: 50,           // SendPulse free SMTP plan: 50 emails/hour cap
+  BATCH_DELAY_MS: 3900000,  // ~65 minutes between batches
 };
-
-// ── Personalization placeholders supported in templates ──
-const PERSONALIZATION_TOKENS = ['{{name}}', '{{email}}', '{{country}}'];
 
 module.exports = {
-  SEND_TO,
-  VALID_SEND_TO_VALUES,
-  CAMPAIGN_STATUS,
-  TEMPLATE_KEYS,
-  VALID_TEMPLATE_KEYS,
   COLLECTIONS,
+  CAMPAIGN_STATUS,
+  SEND_TO,
   SUBSCRIPTION_TIERS,
+  TEMPLATE_KEYS,
   QUEUE_DEFAULTS,
-  RATE_LIMIT,
-  PERSONALIZATION_TOKENS,
+  SENDPULSE_QUEUE_DEFAULTS,
 };

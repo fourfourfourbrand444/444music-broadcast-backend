@@ -1,0 +1,1 @@
+curl -X POST https://444music-backend.bonto.run/api/submissions/notify -H "Content-Type: application/json" -H "x-app-secret: e993b17f0762667e27d5298839dacff4a7409bb74e11e9ecaf0bb2bb647120a8" -d "{\"email\":\"test@example.com\",\"artist_name\":\"Test\",\"release_title\":\"Test\",\"lyrics\":\"Verse one line one\nVerse one line two\"}"

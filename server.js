@@ -13,6 +13,9 @@ const helmet = require('helmet');
 const cors = require('cors');
 
 const adminRoutes = require('./routes/adminRoutes');
+const submissionRoutes = require('./routes/submissionRoutes');
+const verificationRoutes = require('./routes/verificationRoutes');
+const paystackRoutes = require('./routes/paystackRoutes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
@@ -20,25 +23,41 @@ const logger = require('./utils/logger');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// ── Security & core middleware ──
-app.use(helmet());
+app.set('trust proxy', 1);
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrcAttr: ["'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+    },
+  },
+}));
 app.use(cors());
-app.use(express.json({ limit: '2mb' })); // parses JSON bodies; 2mb cap protects against huge payloads
+
+// The Paystack webhook needs the raw body for signature verification,
+// so it must be mounted BEFORE express.json() touches the request.
+app.use('/api/paystack/webhooks/paystack', express.raw({ type: 'application/json' }));
+
+app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// ── Simple health check (useful for Render + uptime monitors) ──
+app.use(express.static('public'));
+
 app.get('/health', (req, res) => {
   res.status(200).json({ success: true, message: '444Music Broadcast Backend is running.' });
 });
 
-// ── Routes ──
 app.use('/api/admin', adminRoutes);
+app.use('/api/submissions', submissionRoutes);
+app.use('/api/verification', verificationRoutes);
+app.use('/api/paystack', paystackRoutes);
 
-// ── 404 + centralized error handler (must be last, in this order) ──
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// ── Startup ──
 async function startServer() {
   try {
     await emailProvider.initialize();

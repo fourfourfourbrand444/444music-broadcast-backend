@@ -7,9 +7,22 @@
  *
  * Also provides aggregate statistics (total campaigns, total emails
  * sent, success/failure rates, last campaign) for the admin dashboard.
+ *
+ * ── sentUids / appendSentUids ──
+ * Every campaign document now also tracks a `sentUids` array —
+ * everyone who has actually had a send attempt made for them within
+ * this specific campaign, recorded batch-by-batch as queueService.js
+ * works through the recipient list (not just once at the very end).
+ * This means the campaign record on disk always reflects exactly who
+ * has already been attempted, even if the server process restarts
+ * partway through a long-running broadcast (e.g. a SendPulse send
+ * paced across several hours to respect its 50-emails/hour cap).
+ * Mirrors the same arrayUnion pattern already used in
+ * campaignGroupService.js's addSentUids().
  */
 
 const { db } = require('../config/firebase');
+const admin = require('firebase-admin');
 const { COLLECTIONS, CAMPAIGN_STATUS } = require('../config/constants');
 const logger = require('../utils/logger');
 
@@ -37,6 +50,7 @@ async function createCampaign({ subject, sender, recipientCount, templateKey, se
     recipientCount,
     successfulSends: 0,
     failedSends: 0,
+    sentUids: [],
     status: CAMPAIGN_STATUS.PROCESSING,
     createdAt: new Date().toISOString(),
     completedAt: null,
@@ -44,6 +58,28 @@ async function createCampaign({ subject, sender, recipientCount, templateKey, se
 
   logger.info(`Campaign created: ${docRef.id} (subject: "${subject}", recipients: ${recipientCount})`);
   return docRef.id;
+}
+
+/**
+ * Records that the given uids have now had a send ATTEMPT made for
+ * this campaign (success or failure both count as "attempted" — a
+ * failure is still a completed attempt, not a pending one). Called
+ * after EVERY batch inside queueService.js's processBroadcast loop,
+ * not just once at the end, so the campaign record is always
+ * up-to-date even mid-broadcast.
+ *
+ * @param {string} campaignId
+ * @param {Array<string>} uids
+ * @returns {Promise<void>}
+ */
+async function appendSentUids(campaignId, uids) {
+  if (!Array.isArray(uids) || uids.length === 0) return;
+
+  await campaignsRef.doc(campaignId).update({
+    sentUids: admin.firestore.FieldValue.arrayUnion(...uids),
+  });
+
+  logger.info(`Campaign ${campaignId}: checkpointed ${uids.length} attempted uid(s).`);
 }
 
 /**
@@ -176,6 +212,7 @@ async function getStatistics() {
 
 module.exports = {
   createCampaign,
+  appendSentUids,
   completeCampaign,
   markCampaignFailed,
   getCampaigns,

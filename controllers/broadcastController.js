@@ -60,6 +60,8 @@ async function sendBroadcast(req, res) {
     sender: req.user?.email || 'admin',
     recipientCount: recipients.length,
     templateKey: templateKey || null,
+    rawHtml: rawHtml || null,
+    rawText: rawText || null,
     sendTo,
   });
 

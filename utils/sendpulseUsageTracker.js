@@ -14,9 +14,20 @@
  *   - allTimeTotal -> NEVER resets, just keeps climbing forever
  *
  * ── SENDPULSE FREE PLAN LIMIT ──
- * Default is 15,000 emails/month, matching SendPulse's free tier.
- * Override with SENDPULSE_MONTHLY_LIMIT in your .env if you're on a
- * different plan.
+ * Default is 12,000 emails/month, matching SendPulse's actual free SMTP
+ * plan (confirmed via the SendPulse dashboard: 52 sent + 11,948 left =
+ * 12,000 total). Override with SENDPULSE_MONTHLY_LIMIT in your .env if
+ * you're on a different plan.
+ *
+ * ── ONE-TIME SEED ──
+ * Because this tracker only counts sends made through this app, it has
+ * no way to see sends SendPulse already processed before the tracker
+ * existed (or during any period it wasn't running). Set
+ * SENDPULSE_SEED_COUNT in your .env to manually align the stored count
+ * with SendPulse's real dashboard number the first time this deploys.
+ * It's applied ONLY if the current month's Firestore count is still 0
+ * (so it's safe to leave the env var in place — it won't re-apply or
+ * clobber real counts on subsequent restarts).
  *
  * Exposes:
  *   hasQuotaRemaining()   -> Promise<boolean>
@@ -28,7 +39,8 @@ const admin = require('firebase-admin');
 const logger = require('./logger');
 
 const USAGE_DOC_REF = db.collection('usage').doc('sendpulse');
-const MONTHLY_LIMIT = parseInt(process.env.SENDPULSE_MONTHLY_LIMIT, 10) || 15000;
+const MONTHLY_LIMIT = parseInt(process.env.SENDPULSE_MONTHLY_LIMIT, 10) || 12000;
+const SEED_COUNT = parseInt(process.env.SENDPULSE_SEED_COUNT, 10) || 0;
 
 function currentMonthKey() {
   const now = new Date();
@@ -39,12 +51,23 @@ function currentMonthKey() {
  * Reads the current usage doc, rolling the monthly `count` over to 0
  * if we've crossed into a new month since the last write. `allTimeTotal`
  * is never touched by the rollover — only `count` resets.
+ *
+ * If SENDPULSE_SEED_COUNT is set and the resolved monthly count is
+ * still 0 (fresh doc, or a fresh month), the seed is applied once here
+ * so downstream reads/quota checks see the real number immediately.
+ * The seed is also folded into allTimeTotal if allTimeTotal is 0,
+ * since a brand-new tracker doc means we have no historical total yet.
  */
 async function readUsage() {
   const snap = await USAGE_DOC_REF.get();
 
   if (!snap.exists) {
-    return { month: currentMonthKey(), count: 0, allTimeTotal: 0 };
+    const seeded = SEED_COUNT > 0;
+    return {
+      month: currentMonthKey(),
+      count: seeded ? SEED_COUNT : 0,
+      allTimeTotal: seeded ? SEED_COUNT : 0,
+    };
   }
 
   const data = snap.data();
@@ -52,7 +75,19 @@ async function readUsage() {
 
   if (data.month !== currentMonthKey()) {
     // New month: monthly count resets, all-time total carries forward untouched.
+    // (Seed is intentionally NOT re-applied here — it's a one-time historical
+    // correction, not a recurring monthly starting point.)
     return { month: currentMonthKey(), count: 0, allTimeTotal };
+  }
+
+  // Same month, doc exists, but count is still 0 and a seed is configured:
+  // apply it once so the real number shows up right away.
+  if ((data.count || 0) === 0 && SEED_COUNT > 0) {
+    return {
+      month: data.month,
+      count: SEED_COUNT,
+      allTimeTotal: allTimeTotal === 0 ? SEED_COUNT : allTimeTotal,
+    };
   }
 
   return { month: data.month, count: data.count || 0, allTimeTotal };

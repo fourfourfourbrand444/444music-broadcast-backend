@@ -1212,9 +1212,23 @@
           loadHistory();
           loadEmailUsage();
           loadSendpulseEmailUsage();
-          if (CURRENT_GROUP_ID) {
-            setTimeout(() => { loadGroups(); }, 2000); // give the async send a moment to finish updating the group
-          }
+         if (CURRENT_GROUP_ID) {
+  setTimeout(async () => {
+    await loadGroups();
+    const group = ALL_GROUPS.find(g => g.id === CURRENT_GROUP_ID);
+    if (group) {
+      document.getElementById('gsSent').textContent = group.sentCount;
+      document.getElementById('gsRemaining').textContent = group.remainingCount;
+      document.getElementById('gsTotal').textContent = group.totalOptedIn;
+    }
+    // Also refresh the eligible-user pool, since sentUids just changed —
+    // otherwise someone who was just emailed could still show up as
+    // "not yet sent" if the admin picks specific users next.
+    if (document.getElementById('sendToSelect').value === 'selected') {
+      loadRemainingUsersForGroup(CURRENT_GROUP_ID);
+    }
+  }, 2000);
+}
         } else {
           alertBox.className = 'alert error';
           alertBox.textContent = data.message || 'Failed to send broadcast.';

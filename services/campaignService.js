@@ -19,6 +19,15 @@
  * paced across several hours to respect its 50-emails/hour cap).
  * Mirrors the same arrayUnion pattern already used in
  * campaignGroupService.js's addSentUids().
+ *
+ * ── rawHtml / rawText ──
+ * Custom (non-template) campaigns now also save their exact rawHtml
+ * and rawText content permanently on the campaign document. Previously
+ * this content was only used once to send and then discarded, so if a
+ * broadcast had to be resumed later (e.g. after a server restart mid
+ * multi-hour send), there was no way to recover what the original
+ * message actually said. Now every campaign — template or custom — is
+ * fully recoverable from its Firestore record.
  */
 
 const { db } = require('../config/firebase');
@@ -38,15 +47,19 @@ const campaignsRef = db.collection(COLLECTIONS.EMAIL_CAMPAIGNS);
  * @param {string} options.sender - admin identifier (e.g. "admin" or an email)
  * @param {number} options.recipientCount
  * @param {string} [options.templateKey]
+ * @param {string} [options.rawHtml] - saved so a custom message can be recovered/resent later
+ * @param {string} [options.rawText] - saved so a custom message can be recovered/resent later
  * @param {string} options.sendTo
  * @returns {Promise<string>} the new campaign's document ID
  */
-async function createCampaign({ subject, sender, recipientCount, templateKey, sendTo }) {
+async function createCampaign({ subject, sender, recipientCount, templateKey, rawHtml, rawText, sendTo }) {
   const docRef = await campaignsRef.add({
     subject,
     sender: sender || 'admin',
     sendTo: sendTo || null,
     templateKey: templateKey || null,
+    rawHtml: rawHtml || null,
+    rawText: rawText || null,
     recipientCount,
     successfulSends: 0,
     failedSends: 0,

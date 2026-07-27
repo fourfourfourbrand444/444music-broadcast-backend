@@ -34,6 +34,16 @@
  * always reflects exactly who has already received the email, even
  * if the in-memory loop that was driving the send is gone.
  *
+ * ── CAMPAIGN GROUP CHECKPOINTING (rollout "already sent" tracking) ──
+ * If a `groupId` is provided (i.e. this broadcast is part of a
+ * multi-day rollout), every batch's attempted UIDs are ALSO recorded
+ * into that campaign group's `sentUids` via
+ * campaignGroupService.addSentUids(). This is what drives the
+ * "already sent / not yet sent" counts shown next to a campaign group
+ * in the admin panel — without this call, the group's sentUids array
+ * never updates and the counts stay stuck at 0 no matter how many
+ * emails actually go out.
+ *
  * NOTE: this checkpointing does NOT automatically resume a broadcast
  * after a restart — the admin still needs to re-trigger a send for
  * the remaining recipients. What it guarantees is that the record of
@@ -46,6 +56,7 @@
 const emailProvider = require('./sendpulseProvider');
 const templateService = require('./templateService');
 const campaignService = require('./campaignService');
+const campaignGroupService = require('./campaignGroupService');
 const logger = require('../utils/logger');
 const { QUEUE_DEFAULTS, SENDPULSE_QUEUE_DEFAULTS } = require('../config/constants');
 
@@ -93,7 +104,9 @@ function getQueueDefaults() {
 /**
  * Processes the full broadcast: renders personalized content for each
  * recipient, then sends in batches with a delay between each batch.
- * Checkpoints sent UIDs into the campaign record after every batch.
+ * Checkpoints sent UIDs into the campaign record after every batch,
+ * and into the campaign group record too if this send is part of a
+ * rollout.
  *
  * @param {Object} options
  * @param {Array<Object>} options.recipients - array of user objects (uid, displayName, email, country)
@@ -103,6 +116,7 @@ function getQueueDefaults() {
  * @param {string} [options.rawText] - used if no templateKey
  * @param {Object} [options.templateData] - extra fields passed into the template function
  * @param {string} [options.campaignId] - if provided, sent UIDs are checkpointed into this campaign after every batch
+ * @param {string} [options.groupId] - if provided (rollout/campaign-group send), sent UIDs are ALSO checkpointed into this group's sentUids after every batch, so "already sent" counts stay accurate
  * @param {number} [options.batchSize] - overrides the provider's default batch size
  * @param {number} [options.batchDelayMs] - overrides the provider's default batch delay
  * @param {Function} [options.onBatchComplete] - optional callback(batchResults, batchIndex, totalBatches) called after each batch, useful for live progress logging
@@ -117,6 +131,7 @@ async function processBroadcast({
   rawText,
   templateData = {},
   campaignId = null,
+  groupId = null,
   batchSize,
   batchDelayMs,
   onBatchComplete,
@@ -138,7 +153,8 @@ async function processBroadcast({
     `Starting broadcast: ${recipients.length} recipients, ` +
     `${batches.length} batch(es) of up to ${effectiveBatchSize}, ` +
     `${effectiveBatchDelayMs}ms delay between batches ` +
-    `(provider: ${typeof emailProvider.getProviderName === 'function' ? emailProvider.getProviderName() : 'unknown'}).`
+    `(provider: ${typeof emailProvider.getProviderName === 'function' ? emailProvider.getProviderName() : 'unknown'})` +
+    `${groupId ? `, campaign group: ${groupId}` : ''}.`
   );
 
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
@@ -202,6 +218,20 @@ async function processBroadcast({
       } catch (err) {
         logger.error(
           `Failed to checkpoint batch ${batchIndex + 1}/${batches.length} for campaign ${campaignId}: ${err.message}`
+        );
+      }
+    }
+
+    // ── Campaign group checkpoint: record the same attempted UIDs
+    // into the group's sentUids too, so the admin panel's
+    // already-sent/not-yet-sent counts reflect reality after this
+    // batch — not just after the whole broadcast finishes.
+    if (groupId) {
+      try {
+        await campaignGroupService.addSentUids(groupId, batchAttemptedUids);
+      } catch (err) {
+        logger.error(
+          `Failed to checkpoint batch ${batchIndex + 1}/${batches.length} into campaign group ${groupId}: ${err.message}`
         );
       }
     }

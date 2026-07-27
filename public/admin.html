@@ -868,7 +868,7 @@
       }
     }
 
-    // ── SendPulse email usage badge (monthly) ──
+    // ── SendPulse email usage badge (monthly + all-time total) ──
     async function loadSendpulseEmailUsage() {
       try {
         const res = await fetch('/api/admin/sendpulse-usage', { headers: apiHeaders() });
@@ -877,7 +877,10 @@
 
         const badge = document.getElementById('sendpulseUsageBadge');
         const text = document.getElementById('sendpulseUsageBadgeText');
-        text.textContent = `${data.sent}/${data.limit} this month · ${data.remaining} left · resets in ${data.resetsInText}`;
+        const allTimeText = (data.allTimeTotal !== undefined && data.allTimeTotal !== null)
+          ? ` · ${data.allTimeTotal} all-time`
+          : '';
+        text.textContent = `${data.sent}/${data.limit} this month · ${data.remaining} left · resets in ${data.resetsInText}${allTimeText}`;
 
         badge.classList.remove('warn', 'critical');
         if (data.remaining <= 200) {

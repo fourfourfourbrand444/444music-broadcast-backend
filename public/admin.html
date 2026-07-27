@@ -291,30 +291,6 @@
       margin-top: 4px;
     }
 
-    .mode-toggle {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 16px;
-    }
-
-    .mode-btn {
-      flex: 1;
-      padding: 9px;
-      text-align: center;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      color: var(--muted);
-    }
-
-    .mode-btn.active {
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-    }
-
     .batch-grid {
       display: grid;
       grid-template-columns: repeat(5, 1fr);
@@ -434,6 +410,7 @@
       background: #fff;
       border: 1px solid var(--border);
       color: var(--text);
+      width: 100%;
     }
 
     button.text-btn {
@@ -477,8 +454,14 @@
       display: block;
     }
 
+    .table-scroll {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
     table {
       width: 100%;
+      min-width: 560px;
       border-collapse: collapse;
       font-size: 13px;
     }
@@ -488,6 +471,7 @@
       text-align: left;
       padding: 10px 8px;
       border-bottom: 1px solid var(--border);
+      white-space: nowrap;
     }
 
     th {
@@ -574,6 +558,35 @@
       }
     }
 
+    @media (max-width: 600px) {
+      header {
+        padding: 12px 14px;
+      }
+
+      header h1 {
+        font-size: 15px;
+      }
+
+      .usage-badges {
+        width: 100%;
+        justify-content: flex-start;
+      }
+
+      header .header-right {
+        width: 100%;
+        justify-content: space-between;
+      }
+
+      .tabs {
+        margin-bottom: 16px;
+      }
+
+      .tab {
+        font-size: 12px;
+        padding: 8px 4px;
+      }
+    }
+
     @media (max-width: 480px) {
       .container {
         padding: 14px 10px 50px;
@@ -583,9 +596,20 @@
         padding: 16px;
       }
 
-      .usage-badges {
+      .card h2 {
+        font-size: 14px;
+      }
+
+      .btn-row {
+        flex-direction: column;
+      }
+
+      button.primary {
         width: 100%;
-        justify-content: flex-start;
+      }
+
+      .stat-box .num {
+        font-size: 18px;
       }
     }
   </style>
@@ -676,41 +700,20 @@
         <div class="card">
           <h2>Message</h2>
 
-          <div class="mode-toggle">
-            <div class="mode-btn active" id="modeTemplateBtn" onclick="setMode('template')">Use a template</div>
-            <div class="mode-btn" id="modeCustomBtn" onclick="setMode('custom')">Write custom</div>
-          </div>
-
           <div class="field">
             <label>Subject</label>
             <input type="text" id="subjectInput" placeholder="e.g. New release is live!">
           </div>
 
-          <div id="templateFields">
-            <div class="field">
-              <label>Template</label>
-              <select id="templateSelect">
-                <option value="welcome">Welcome</option>
-                <option value="announcement">Announcement</option>
-                <option value="newsletter">Newsletter</option>
-                <option value="promotion">Promotion</option>
-                <option value="releaseUpdate">Release Update</option>
-                <option value="playlistFeature">Playlist Feature</option>
-                <option value="distributionUpdate">Distribution Update</option>
-              </select>
-              <div class="hint">Personalization tokens {{name}}, {{email}}, {{country}} are applied automatically.</div>
-            </div>
+          <div class="field">
+            <label>HTML content</label>
+            <textarea id="rawHtmlInput" placeholder="<p>Hello {{name}}!</p>"></textarea>
+            <div class="hint">Personalization tokens {{name}}, {{email}}, {{country}} are applied automatically.</div>
           </div>
 
-          <div id="customFields" style="display:none;">
-            <div class="field">
-              <label>Custom HTML</label>
-              <textarea id="rawHtmlInput" placeholder="<p>Hello {{name}}!</p>"></textarea>
-            </div>
-            <div class="field">
-              <label>Plain text version (optional)</label>
-              <textarea id="rawTextInput" placeholder="Hello {{name}}!"></textarea>
-            </div>
+          <div class="field">
+            <label>Plain text version (optional)</label>
+            <textarea id="rawTextInput" placeholder="Hello {{name}}!"></textarea>
           </div>
         </div>
 
@@ -785,7 +788,6 @@
     let ADMIN_SECRET = '';
     let ALL_USERS = [];          // full opted-in pool, or group's remaining pool
     let SELECTED_UIDS = new Set();
-    let CURRENT_MODE = 'template';
     let CURRENT_GROUP_ID = '';
     let ALL_GROUPS = [];
     let BATCH_SIZE = 150;
@@ -867,12 +869,6 @@
     }
 
     // ── SendPulse email usage badge (monthly) ──
-    // Hits a new admin route — GET /api/admin/sendpulse-usage — which should
-    // call sendpulseProvider.getUsageSummary() server-side and return
-    // { success, sent, limit, remaining, resetsInText } for the CURRENT
-    // CALENDAR MONTH, mirroring the shape /api/admin/email-usage already
-    // returns for Brevo's daily count. Add that route + wire it to
-    // sendpulseUsageTracker before this will show real numbers.
     async function loadSendpulseEmailUsage() {
       try {
         const res = await fetch('/api/admin/sendpulse-usage', { headers: apiHeaders() });
@@ -1002,15 +998,6 @@
       }
     }
 
-    // ── Compose mode ──
-    function setMode(mode) {
-      CURRENT_MODE = mode;
-      document.getElementById('modeTemplateBtn').classList.toggle('active', mode === 'template');
-      document.getElementById('modeCustomBtn').classList.toggle('active', mode === 'custom');
-      document.getElementById('templateFields').style.display = mode === 'template' ? 'block' : 'none';
-      document.getElementById('customFields').style.display = mode === 'custom' ? 'block' : 'none';
-    }
-
     function onSendToChange() {
       const val = document.getElementById('sendToSelect').value;
       document.getElementById('userPickerWrap').style.display = val === 'selected' ? 'block' : 'none';
@@ -1048,16 +1035,6 @@
       }
     }
 
-    // FIXED — the picker now hides two categories of noise:
-    //   1. Users with no real name on file (previously shown with the
-    //      generic "Artist" fallback label — these are accounts whose
-    //      Firestore doc never got a `name` field written, e.g. from the
-    //      old Google Sign-In race condition).
-    //   2. Duplicate accounts sharing the same email (Firebase Auth allows
-    //      separate uids for the same email across different sign-in
-    //      methods, e.g. one email/password account + one Google account).
-    // This is display-only — ALL_USERS itself is untouched, so nothing
-    // about who's eligible to actually receive a broadcast changes.
     function renderUserList() {
       const q = document.getElementById('userSearch').value.toLowerCase();
 
@@ -1101,6 +1078,7 @@
     }
 
     // ── Build message payload ──
+    // Custom HTML only — templates have been removed from this admin.
     function buildMessagePayload() {
       const subject = document.getElementById('subjectInput').value.trim();
       if (!subject) {
@@ -1108,21 +1086,17 @@
         return null;
       }
 
-      const payload = { subject };
-
-      if (CURRENT_MODE === 'template') {
-        payload.templateKey = document.getElementById('templateSelect').value;
-      } else {
-        const html = document.getElementById('rawHtmlInput').value.trim();
-        if (!html) {
-          alert('Please enter custom HTML content.');
-          return null;
-        }
-        payload.rawHtml = html;
-        payload.rawText = document.getElementById('rawTextInput').value.trim();
+      const html = document.getElementById('rawHtmlInput').value.trim();
+      if (!html) {
+        alert('Please enter HTML content.');
+        return null;
       }
 
-      return payload;
+      return {
+        subject,
+        rawHtml: html,
+        rawText: document.getElementById('rawTextInput').value.trim(),
+      };
     }
 
     // ── Send test ──
@@ -1181,8 +1155,6 @@
 
       const sendTo = document.getElementById('sendToSelect').value;
 
-      // Resolve the working pool: either the full/group-filtered ALL_USERS
-      // (for "all eligible"), or the checked SELECTED_UIDS (for "selected").
       let targetUids = [];
 
       if (sendTo === 'selected') {
@@ -1266,7 +1238,7 @@
           el.textContent = 'No campaigns sent yet.';
           return;
         }
-        el.className = '';
+        el.className = 'table-scroll';
         el.innerHTML = `
           <table>
             <thead>

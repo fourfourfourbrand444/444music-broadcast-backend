@@ -5,13 +5,10 @@
  * routes, and error handling. Also initializes Firebase Admin and
  * the email provider on startup.
  */
-
 require('dotenv').config();
-
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
-
 const adminRoutes = require('./routes/adminRoutes');
 const submissionRoutes = require('./routes/submissionRoutes');
 const verificationRoutes = require('./routes/verificationRoutes');
@@ -35,6 +32,7 @@ app.use(helmet({
     },
   },
 }));
+
 app.use(cors());
 
 // The Paystack webhook needs the raw body for signature verification,
@@ -43,7 +41,6 @@ app.use('/api/paystack/webhooks/paystack', express.raw({ type: 'application/json
 
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
-
 app.use(express.static('public'));
 
 app.get('/health', (req, res) => {
@@ -61,7 +58,6 @@ app.use(errorHandler);
 async function startServer() {
   try {
     await emailProvider.initialize();
-
     app.listen(PORT, () => {
       logger.info(`444Music Broadcast Backend listening on port ${PORT}`);
       logger.info(`Email provider: ${emailProvider.getProviderName()}`);

@@ -21,7 +21,13 @@
  * review" instead of being mislabeled as a new submission or a
  * payment confirmation.
  *
+ * Also exports notifyRejection() — called from admin.html the moment
+ * a submission's status is set to "Rejected", sending the artist a
+ * dark-themed templated email with the rejection reason and a link
+ * to fix it.
+ *
  *   POST /api/submissions/notify
+ *   POST /api/submissions/notify-rejection
  */
 
 const emailProvider = require('../services/emailProvider');
@@ -452,6 +458,68 @@ function buildUserHtml(d) {
   });
 }
 
+/**
+ * Builds the dark-themed "Release Needs Attention" email, sent to the
+ * artist the moment a submission's status is set to "Rejected" from
+ * admin.html. Uses the exact black/dark-gray theme and layout supplied
+ * by the admin — distinct from the light-themed _artistEmailShell used
+ * by the other artist-facing emails above.
+ */
+function buildRejectionHtml(d) {
+  const reasonText = d.rejection_reason || 'Please check your dashboard for details.';
+  return `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#000000;">
+    <tr>
+      <td align="center" style="padding:40px 20px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px; background-color:#0a0a0a; border:1px solid #2a2a2a; border-radius:12px;">
+          <tr>
+            <td style="padding:36px 28px; font-family:'Helvetica Neue', Arial, sans-serif;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="padding-bottom:24px;">
+                    <span style="display:inline-block; width:48px; height:48px; line-height:48px; border:1px solid #ffffff; border-radius:50%; color:#ffffff; font-size:22px; font-weight:bold; text-align:center;">!</span>
+                  </td>
+                </tr>
+              </table>
+              <h1 style="color:#ffffff; font-size:20px; text-align:center; margin:0 0 8px 0; letter-spacing:0.5px;">
+                RELEASE NEEDS ATTENTION
+              </h1>
+              <p style="color:#999999; font-size:14px; text-align:center; margin:0 0 28px 0;">
+                444Music Distribution
+              </p>
+              <p style="color:#e0e0e0; font-size:15px; line-height:1.6; margin:0 0 12px 0;">
+                Hey ${d.artist_name || 'there'},
+              </p>
+              <p style="color:#c0c0c0; font-size:15px; line-height:1.6; margin:0 0 28px 0;">
+                Your release "${d.release_title || 'your release'}" needs a quick fix before we can move it forward: <strong style="color:#ffffff;">${reasonText}</strong>. Tap the button below to see what's wrong and get it sorted.
+              </p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="padding-bottom:28px;">
+                    <table role="presentation" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td style="background-color:#ffffff; border-radius:24px;">
+                          <a href="https://www.444musicdistro.com/wey" style="display:inline-block; color:#000000; text-decoration:none; font-weight:bold; font-size:13px; letter-spacing:0.5px; padding:11px 24px; white-space:nowrap;">
+                            VIEW &amp; FIX RELEASE
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+              <p style="color:#666666; font-size:12px; text-align:center; margin:0; border-top:1px solid #2a2a2a; padding-top:20px;">
+                444Music Distribution — Empowering independent artists
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+  `;
+}
+
 // ─── SHARED ADMIN SEND (used by normal submit flow, resend, and resubmit) ─
 async function _sendAdminNotification(data) {
   if (!ADMIN_EMAIL) {
@@ -538,6 +606,36 @@ async function notifyPaidExistingSubmission(data) {
 }
 
 /**
+ * POST /api/submissions/notify-rejection
+ * Fires from admin.html the moment a submission's status is set to
+ * "Rejected" (single-card reject or bulk reject). Sends the artist a
+ * dark-themed templated email with the rejection reason and a link
+ * to fix it, using the exact theme/layout supplied by the admin.
+ */
+async function notifyRejection(req, res) {
+  const data = req.body || {};
+
+  if (!data.email || !data.artist_name || !data.release_title) {
+    return res.status(400).json({
+      success: false,
+      message: 'Missing required fields: "email", "artist_name", and "release_title" are required.',
+    });
+  }
+
+  const result = await emailProvider.sendEmail({
+    to: data.email,
+    subject: `Release needs attention — ${data.release_title}`,
+    html: buildRejectionHtml(data),
+  });
+
+  if (!result.success) {
+    logger.error(`Rejection notice email failed: ${result.error}`);
+  }
+
+  return res.status(200).json({ success: result.success });
+}
+
+/**
  * Maps a raw Firestore `submissions` doc (camelCase, as written by
  * release_info_screen.dart) into the flat snake_case shape buildAdminHtml
  * expects. Centralized here so paystackRoutes.js doesn't have to
@@ -618,4 +716,5 @@ module.exports = {
   notifySubmission,
   notifyPaidExistingSubmission,
   mapSubmissionForEmail,
+  notifyRejection,
 };

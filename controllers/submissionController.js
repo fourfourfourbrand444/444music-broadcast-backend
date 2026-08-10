@@ -4,12 +4,14 @@
  * Sends the admin-notification and artist-confirmation emails via
  * emailProvider (Brevo) once, when a submission is created in Release
  * Info. The admin email now also carries the cover art and audio file
- * links directly — and each audio file entry now shows its per-track
- * Main Artist and Featured Artist details too, not just the title and
- * download link. Those fields are collected on the Files/Upload page
- * (and can also be tagged per-track on the Release Info page's
- * Featuring section) and now flow all the way through to this email
- * instead of being dropped or merged together across tracks.
+ * links directly — and each audio file entry now shows its own full
+ * per-track artist list (Main / Featured / Secondary, each with
+ * clickable Spotify/Apple icons where a profile link was provided),
+ * not just a flat "Main Artist" / "Featured Artist" line. This data is
+ * entered once on the Files/Upload page and flows unchanged through
+ * Release Info (read-only there) straight into this email, so an
+ * Album's Track 1 features and Track 2 features never get merged or
+ * confused with each other.
  *
  * Also exports notifyPaidExistingSubmission() — reused by
  * paystackRoutes.js to resend this SAME admin email (metadata + files)
@@ -42,6 +44,9 @@ const SOCIAL_LINKS = [
   { label: 'Instagram — @444musicdistro_', url: 'https://www.instagram.com/444musicdistro_/' },
   { label: 'Playlists — @444music_playlist', url: 'https://www.instagram.com/444music_playlist/' },
 ];
+
+// Artist type -> display label, shared by the email builder below.
+const ARTIST_TYPE_LABEL = { main: 'Main', featured: 'Featured', secondary: 'Secondary' };
 
 // ─── EMAIL STYLE CONSTANTS ────────────────────────────────────────────────
 const _colors = {
@@ -128,21 +133,46 @@ function _coverImageBlock(url) {
 }
 
 /**
- * Renders the Audio Files section. Each entry now shows, alongside the
- * title and download button, its own per-track Main Artist and Featured
- * Artist details when present — labeled explicitly so it's unambiguous
- * at a glance which artist is the main credit and which is featured on
- * THAT specific track, without it being confused with the release-wide
- * merged "Featuring" row further down in Release Details.
+ * Renders a track's tagged-artist line for the Audio Files section:
+ * "Wizkid (Main)  ·  Tems (Featured) [spotify icon][apple icon]  ·  ..."
+ * Each artist shows their type label, plus clickable Spotify/Apple
+ * icons only when that artist actually has a link on file. Icons are
+ * small inline <img> tags (simpleicons CDN) wrapped in an <a> so admin
+ * can tap straight through to the artist's profile from the email.
+ */
+function _artistsLine(artists) {
+  if (!artists || !artists.length) return '';
+  const parts = artists.map((a) => {
+    const typeLabel = ARTIST_TYPE_LABEL[a.type] || a.type || 'Featured';
+    const icons = [];
+    if (a.spotifyUrl) {
+      icons.push(`<a href="${a.spotifyUrl}" style="text-decoration:none;"><img src="https://cdn.simpleicons.org/spotify/1DB954" width="12" height="12" style="vertical-align:middle; margin-left:5px;" alt="Spotify"></a>`);
+    }
+    if (a.appleUrl) {
+      icons.push(`<a href="${a.appleUrl}" style="text-decoration:none;"><img src="https://cdn.simpleicons.org/applemusic/FC3C44" width="12" height="12" style="vertical-align:middle; margin-left:3px;" alt="Apple Music"></a>`);
+    }
+    return `<span style="color:${_colors.value}; font-weight:600;">${a.name || 'Unknown'}</span> <span style="color:${_colors.label};">(${typeLabel})</span>${icons.join('')}`;
+  });
+  return parts.join(' &nbsp;&middot;&nbsp; ');
+}
+
+/**
+ * Renders the Audio Files section. Each entry shows the track title
+ * and download button, plus — directly beneath the title — the full
+ * tagged artist list for THAT track only (name + type + Spotify/Apple
+ * icons where linked). This is what keeps an Album's per-track
+ * features unambiguous: Track 1's chip line only ever contains Track
+ * 1's own artists array, never merged with any other track's.
  */
 function _audioSection(files) {
   if (!files || !files.length) {
     return _section('Audio Files', _row('Track File', null));
   }
   const rows = files.map((f, i) => {
-    const metaBits = [];
-    if (f.artist) metaBits.push(`<div style="font-family:Arial,Helvetica,sans-serif; font-size:11.5px; color:${_colors.label}; margin-top:3px;">Main Artist: <span style="color:${_colors.value};">${f.artist}</span></div>`);
-    if (f.featuring) metaBits.push(`<div style="font-family:Arial,Helvetica,sans-serif; font-size:11.5px; color:${_colors.label}; margin-top:1px;">Featured Artist: <span style="color:${_colors.value};">${f.featuring}</span></div>`);
+    const artistsLine = _artistsLine(f.artists);
+    const metaBits = artistsLine
+      ? [`<div style="font-family:Arial,Helvetica,sans-serif; font-size:11.5px; margin-top:3px;">${artistsLine}</div>`]
+      : [];
 
     return `
     <tr>
@@ -636,10 +666,36 @@ async function notifyRejection(req, res) {
 }
 
 /**
+ * Builds the release-wide "Featuring" summary row for the Release
+ * Details section — one line per track, listing every non-Main artist
+ * on that track with their type. Grouped by track on purpose so an
+ * Album's Track 1 features and Track 2 features are never merged into
+ * one flat list. Mirrors formatFeaturingForEmail() on the Release Info
+ * page, so the admin email and the frontend never disagree.
+ *
+ *   Track 1 — Abundance: Rozay (Featured), T Flow (Secondary)
+ *   Track 2 — Overflow: Kwesi Arthur (Featured)
+ */
+function _formatFeaturingFromAudioFiles(audioFiles) {
+  const list = audioFiles || [];
+  const lines = [];
+  list.forEach((f, i) => {
+    const others = (f.artists || []).filter((a) => a.type !== 'main');
+    if (!others.length) return;
+    const names = others
+      .map((a) => `${a.name} (${ARTIST_TYPE_LABEL[a.type] || a.type})`)
+      .join(', ');
+    lines.push(`Track ${i + 1}${f.title ? ' — ' + f.title : ''}: ${names}`);
+  });
+  return lines.length ? lines.join('\n') : 'None';
+}
+
+/**
  * Maps a raw Firestore `submissions` doc (camelCase, as written by
- * release_info_screen.dart) into the flat snake_case shape buildAdminHtml
- * expects. Centralized here so paystackRoutes.js doesn't have to
- * duplicate this field-by-field mapping.
+ * release_info_screen.dart / release-info.html) into the flat
+ * snake_case shape buildAdminHtml expects. Centralized here so
+ * paystackRoutes.js doesn't have to duplicate this field-by-field
+ * mapping.
  */
 function mapSubmissionForEmail(sub) {
   const credits = sub.credits || {};
@@ -652,18 +708,14 @@ function mapSubmissionForEmail(sub) {
       .join('\n');
   };
 
-  const featuredList = sub.featuredArtists || [];
-  const featuring = featuredList.length
-    ? featuredList
-      .map((f) => `${f.name} (${f.role})${f.url ? ' — ' + f.url : ''}`)
-      .join('\n')
-    : 'None';
-
   return {
     email: sub.email,
     artist_name: sub.artistName,
     release_title: sub.releaseTitle,
-    featuring,
+    // Built directly from the per-track artists arrays on sub.audioFiles
+    // — replaces the old sub.featuredArtists {name, role, url} list,
+    // which doesn't exist in the new data shape.
+    featuring: _formatFeaturingFromAudioFiles(sub.audioFiles),
     release_type: sub.releaseType,
     genre: sub.genre,
     language: sub.language || 'Not specified',
@@ -696,17 +748,23 @@ function mapSubmissionForEmail(sub) {
     // going to distribution. Falls back to coverURL only for older
     // submissions saved before this field existed.
     cover_url: sub.officialCoverURL || sub.coverURL || '',
-    // Carries Main Artist + Featured Artist per track (previously only
-    // title and url), matching what _audioSection now renders. Each
-    // track's `featuring` value is whatever was resolved and tagged on
-    // the Release Info page (upload-page text, or a manually assigned
-    // track), so per-track features never collapse into one bucket.
+    // Each track now carries its FULL tagged artist list — {name, type,
+    // spotifyUrl, appleUrl} — instead of the old flat artist/featuring
+    // strings. _audioSection() renders each track's own artists array
+    // with type labels + clickable Spotify/Apple icons, so per-track
+    // features never collapse into one merged bucket. Older docs saved
+    // before this change won't have `.artists` on each track — those
+    // entries just render with an empty artists line, no crash.
     audio_files: (sub.audioFiles || [])
       .filter((f) => f && f.url)
       .map((f) => ({
         title: f.title || sub.releaseTitle || 'Track',
-        artist: f.artist || sub.artistName || '',
-        featuring: f.featuring || '',
+        artists: (f.artists || []).map((a) => ({
+          name: a.name || '',
+          type: a.type || 'featured',
+          spotifyUrl: a.spotifyUrl || '',
+          appleUrl: a.appleUrl || '',
+        })),
         url: f.url,
       })),
   };

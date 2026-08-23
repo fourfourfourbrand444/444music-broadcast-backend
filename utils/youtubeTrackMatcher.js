@@ -29,12 +29,24 @@ function normalize(str) {
   if (!str) return '';
   return str
     .toLowerCase()
-    .replace(/\(feat\.?[^)]*\)/g, '')
-    .replace(/\[feat\.?[^\]]*\]/g, '')
+    // Decode the handful of HTML entities that show up in submitted
+    // titles (e.g. "&amp;" for "&") — left undecoded, these leave
+    // stray junk words like "amp" in the comparison text.
+    .replace(/&amp;/g, '&')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&nbsp;/g, ' ')
+    // "feat." / "ft." / "featuring" in any bracket style
+    .replace(/[\(\[]\s*(feat|ft|featuring)\.?[^\)\]]*[\)\]]/g, '')
     .replace(/\(official\s*(audio|video|music video|lyric video)?\)/g, '')
     .replace(/\[official\s*(audio|video|music video|lyric video)?\]/g, '')
     .replace(/\(prod\.?[^)]*\)/g, '')
     .replace(/official\s*(audio|video|music video|lyric video)/g, '')
+    // Common version/edit tags YouTube or the artist appends that
+    // don't change which song it is — stripping these prevents an
+    // otherwise-correct match from scoring low just because one side
+    // has "(Remastered)" and the other doesn't.
+    .replace(/[\(\[]\s*(remastered|remaster|radio edit|radio version|clean|explicit|live|deluxe|bonus track|extended( mix)?|lyric video|visualizer|clip officiel|video version)\s*[\)\]]/g, '')
     .replace(/[^a-z0-9\s]/g, '')
     .replace(/\s+/g, ' ')
     .trim();

@@ -17,7 +17,7 @@ const passwordResetRoutes = require('./routes/passwordResetRoutes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
-const { getArtistPopularStreams, debugArtistPageSnippet, parseId } = require('./utils/spotifyStreamScraper');
+const { getViewCount } = require('./utils/youtubeViewFetcher');
 const app = express();
 const PORT = process.env.PORT || 5000;
 app.set('trust proxy', 1);
@@ -46,30 +46,16 @@ app.use('/api/submissions', submissionRoutes);
 app.use('/api/verification', verificationRoutes);
 app.use('/api/verification', passwordResetRoutes);
 app.use('/api/paystack', paystackRoutes);
-// TEMPORARY — manual test routes for the Spotify stream-count scraper.
-// Remove these once the scraper is wired into a proper scheduled job.
-app.get('/test-spotify-scrape', async (req, res) => {
-  const artistUrl = req.query.url;
-  if (!artistUrl) {
-    return res.status(400).json({ error: 'Add ?url=<spotify artist link or ID> to the address' });
+// TEMPORARY — manual test route for the YouTube view-count fetcher.
+// Remove once wired into a proper scheduled job.
+app.get('/test-youtube-views', async (req, res) => {
+  const input = req.query.url;
+  if (!input) {
+    return res.status(400).json({ error: 'Add ?url=<youtube link or video ID> to the address' });
   }
-  const artistId = parseId(artistUrl, 'artist') || artistUrl;
   try {
-    const result = await getArtistPopularStreams(artistId);
+    const result = await getViewCount(input);
     res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-app.get('/test-spotify-debug', async (req, res) => {
-  const artistUrl = req.query.url;
-  if (!artistUrl) {
-    return res.status(400).json({ error: 'Add ?url=<spotify artist link or ID> to the address' });
-  }
-  const artistId = parseId(artistUrl, 'artist') || artistUrl;
-  try {
-    const result = await debugArtistPageSnippet(artistId);
-    res.type('text/plain').send(result.found ? result.snippet : `Not found. HTML length: ${result.htmlLength}\n\n${result.sampleStart}`);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

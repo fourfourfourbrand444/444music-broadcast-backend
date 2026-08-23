@@ -103,6 +103,37 @@ app.get('/test-refresh-all-youtube-streams', async (req, res) => {
   }
 });
 
+// TEMPORARY — inspect submissions flagged 'needs_review' so we can see
+// exactly what they matched to (and why) instead of guessing at fixes.
+app.get('/test-needs-review', async (req, res) => {
+  try {
+    const admin = require('firebase-admin');
+    const db = admin.firestore();
+    const snap = await db
+      .collection('submissions')
+      .where('youtubeMatchStatus', '==', 'needs_review')
+      .get();
+
+    const items = snap.docs.map((doc) => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        releaseTitle: d.releaseTitle || d.songTitle || d.title || '',
+        artistName: d.artistName || '',
+        topCandidates: (d.youtubeMatchCandidates || []).map((c) => ({
+          title: c.title,
+          channelTitle: c.channelTitle,
+          score: c.score,
+        })),
+      };
+    });
+
+    res.json({ count: items.length, items });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.use(notFoundHandler);
 app.use(errorHandler);
 

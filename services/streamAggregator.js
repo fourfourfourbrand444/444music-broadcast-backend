@@ -237,22 +237,12 @@ async function matchApprovedSubmissions() {
 /* ---------------------------------------------------------------------
  * JOB 2: REFRESH VIEW COUNTS + ROLL UP TOTALS
  * ------------------------------------------------------------------- */
-/**
- * Recalculates and saves youtubeStreams + totalStreams for ONE user,
- * based on already-matched tracks only — gathered from BOTH the
- * per-track `youtubeTrackMatches` map (new-style, multi-track aware)
- * and the legacy single `youtubeVideoId` field, across all of that
- * user's submissions.
- *
- * @param {string} userId
- */
 async function refreshUserYouTubeStreams(userId) {
   const submissionsSnap = await db
     .collection('submissions')
     .where('userId', '==', userId)
     .get();
 
-  // Each entry: { docId, trackKey (null for legacy), videoId }
   const matchedTracks = [];
 
   submissionsSnap.forEach((doc) => {
@@ -266,8 +256,6 @@ async function refreshUserYouTubeStreams(userId) {
       });
     }
 
-    // Legacy single-track field — only relevant for older submissions
-    // that predate audioFiles/youtubeTrackMatches.
     if (data.youtubeVideoId) {
       matchedTracks.push({ docId: doc.id, trackKey: null, videoId: data.youtubeVideoId });
     }
@@ -296,10 +284,6 @@ async function refreshUserYouTubeStreams(userId) {
     });
   }
 
-  // Write views back — per-track into youtubeTrackMatches[key].views
-  // for new-style submissions, or the legacy youtubeViews field for
-  // old ones. Grouped by submission doc since Firestore updates are
-  // per-document, and a submission can have several matched tracks.
   const byDoc = {};
   matchedTracks.forEach((t) => {
     const views = viewsByVideoId[t.videoId];
@@ -333,7 +317,7 @@ async function refreshUserYouTubeStreams(userId) {
     db.collection('analytics').doc(userId),
     {
       youtubeStreams: totalViews,
-      totalStreams: totalViews, // update this formula if other sources get added back in later
+      totalStreams: totalViews,
       streamsUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     { merge: true }
@@ -343,10 +327,6 @@ async function refreshUserYouTubeStreams(userId) {
   return { userId, tracksFound: matchedTracks.length, totalViews };
 }
 
-/**
- * Refreshes YouTube streams for EVERY user with at least one matched
- * track (new-style per-track match, or legacy single match).
- */
 async function refreshAllUsersYouTubeStreams() {
   const snap = await db.collection('submissions').get();
 

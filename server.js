@@ -9,6 +9,7 @@ require('dotenv').config();
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
+const cron = require('node-cron');
 const adminRoutes = require('./routes/adminRoutes');
 const submissionRoutes = require('./routes/submissionRoutes');
 const verificationRoutes = require('./routes/verificationRoutes');
@@ -18,6 +19,7 @@ const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
 const { getViewCount } = require('./utils/youtubeViewFetcher');
+const { refreshAllUsersYouTubeStreams } = require('./services/streamAggregator');
 const app = express();
 const PORT = process.env.PORT || 5000;
 app.set('trust proxy', 1);
@@ -47,7 +49,7 @@ app.use('/api/verification', verificationRoutes);
 app.use('/api/verification', passwordResetRoutes);
 app.use('/api/paystack', paystackRoutes);
 // TEMPORARY — manual test route for the YouTube view-count fetcher.
-// Remove once wired into a proper scheduled job.
+// Remove once the scheduled job below has been confirmed working.
 app.get('/test-youtube-views', async (req, res) => {
   const input = req.query.url;
   if (!input) {
@@ -56,6 +58,16 @@ app.get('/test-youtube-views', async (req, res) => {
   try {
     const result = await getViewCount(input);
     res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+// TEMPORARY — manually trigger a full YouTube streams refresh for all
+// users, so we can test it without waiting for the scheduled run.
+app.get('/test-refresh-all-youtube-streams', async (req, res) => {
+  try {
+    const results = await refreshAllUsersYouTubeStreams();
+    res.json({ usersUpdated: results.length, results });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -75,4 +87,16 @@ async function startServer() {
   }
 }
 startServer();
+
+// Refreshes every user's real YouTube stream totals every 6 hours.
+cron.schedule('0 */6 * * *', async () => {
+  logger.info('Running scheduled YouTube streams refresh...');
+  try {
+    const results = await refreshAllUsersYouTubeStreams();
+    logger.info(`YouTube streams refresh complete: ${results.length} users updated`);
+  } catch (err) {
+    logger.error(`YouTube streams refresh failed: ${err.message}`);
+  }
+});
+
 module.exports = app;

@@ -1,26 +1,25 @@
 /**
  * spotifyStreamScraper.js
  *
- * Fetches the CURRENT play count for a track from its public Spotify
- * page (open.spotify.com/track/{id}). There is no official API for
- * play counts, so this reads the same publicly-rendered data any
- * logged-out visitor sees when they open the page in a browser.
+ * Fetches CURRENT play counts from an ARTIST's public Spotify page
+ * (open.spotify.com/artist/{id}), specifically the "Popular" section
+ * which lists that artist's ~5 most-played tracks with real numbers.
  *
- * IMPORTANT — this is fragile by nature:
- * - Spotify can change the page's internal JSON structure at any time
- *   without notice, which will break the parsing below.
- * - Some tracks (usually very new or very low-play) may not expose a
- *   play count at all — treat a null result as "not available yet",
- *   not as an error.
- * - Keep request frequency low and cache results (see notes at the
- *   bottom) — hammering this endpoint risks your requests getting
- *   blocked, which would break it for every user, not just one.
+ * WHY ARTIST PAGE INSTEAD OF TRACK PAGE:
+ * Spotify no longer exposes a raw play-count field anywhere in a
+ * track's own page data. The only public numbers left live in the
+ * artist's "Popular" tracks list. For an artist with a small catalog,
+ * this can cover most or all of their releases. For a prolific artist
+ * with 10+ releases, only their top ~5 will ever show a real count —
+ * everything else should be treated as "not available", not an error.
+ *
+ * IMPORTANT — fragile by nature, same caveats as before:
+ * - Spotify can change page structure any time without notice.
+ * - Keep request frequency low and cache results.
  */
 
-const TRACK_PAGE_URL = (id) => `https://open.spotify.com/track/${id}`;
+const ARTIST_PAGE_URL = (id) => `https://open.spotify.com/artist/${id}`;
 
-// A normal browser User-Agent reduces the chance of being served a
-// stripped-down or bot-detection page.
 const HEADERS = {
   'User-Agent':
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -28,72 +27,113 @@ const HEADERS = {
 };
 
 /**
- * Extracts the play count from the track page's embedded JSON state.
- * Spotify ships an initial-state script tag containing the same data
- * used to render the page — this looks for a "playcount" field inside
- * it. Falls back to null if the shape isn't found (page changed, or
- * this track just doesn't expose one).
+ * Parses a Spotify track or artist ID out of a pasted URL.
  */
-function extractPlayCount(html) {
-  // Primary approach: look for "playcount":"1234567" style field
-  // anywhere in the embedded JSON (works regardless of which script
-  // tag currently wraps it, which is the part most likely to shift).
-  const match = html.match(/"playcount"\s*:\s*"?(\d+)"?/i);
-  if (match) {
-    return parseInt(match[1], 10);
-  }
-  return null;
+function parseId(url, kind = 'track') {
+  const match = url.match(new RegExp(`${kind}\\/([a-zA-Z0-9]+)`));
+  return match ? match[1] : null;
 }
 
 /**
- * Fetches the current play count for a single track.
- *
- * @param {string} trackId - Spotify track ID (not the full URL)
- * @returns {Promise<{ trackId: string, streams: number|null, fetchedAt: string }>}
+ * Extracts {trackId, streams} for each track found in the artist
+ * page's "Popular" section, by looking for track links followed
+ * within a short window by a comma-formatted number.
  */
-async function getStreamCount(trackId) {
-  const res = await fetch(TRACK_PAGE_URL(trackId), { headers: HEADERS });
+function extractPopularTracks(html) {
+  const results = [];
+  const trackLinkRegex = /track\/([a-zA-Z0-9]{22})/g;
+  const seen = new Set();
+  let match;
 
-  if (!res.ok) {
-    throw new Error(`Failed to fetch track page: ${res.status} ${res.statusText}`);
+  while ((match = trackLinkRegex.exec(html)) !== null) {
+    const trackId = match[1];
+    if (seen.has(trackId)) continue;
+    seen.add(trackId);
+
+    const windowStart = match.index;
+    const windowEnd = Math.min(html.length, windowStart + 600);
+    const chunk = html.slice(windowStart, windowEnd);
+
+    const numberMatch = chunk.match(/(\d{1,3}(?:,\d{3})+)/);
+    if (numberMatch) {
+      results.push({
+        trackId,
+        streams: parseInt(numberMatch[1].replace(/,/g, ''), 10),
+      });
+    }
   }
 
+  return results;
+}
+
+/**
+ * Fetches the artist page and returns play counts for whichever
+ * tracks appear in the Popular section.
+ */
+async function getArtistPopularStreams(artistId) {
+  const res = await fetch(ARTIST_PAGE_URL(artistId), { headers: HEADERS });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch artist page: ${res.status} ${res.statusText}`);
+  }
   const html = await res.text();
-  const streams = extractPlayCount(html);
+  const tracks = extractPopularTracks(html);
 
   return {
-    trackId,
-    streams,
+    artistId,
+    tracks,
     fetchedAt: new Date().toISOString(),
   };
 }
 
 /**
- * Parses a Spotify track ID out of a pasted track URL, e.g.
- * "https://open.spotify.com/track/6rqhFgbbKwnb9MLmUQDhG6?si=abc123"
- * -> "6rqhFgbbKwnb9MLmUQDhG6"
- * Returns null if the URL doesn't look like a track link.
+ * DEBUG HELPER — returns a raw snippet of the artist page's HTML
+ * around the word "Popular", so we can see Spotify's real current
+ * markup and fix the regex above if it's not matching correctly.
+ * Not meant to stay in production long-term.
  */
-function parseTrackId(url) {
-  const match = url.match(/track\/([a-zA-Z0-9]+)/);
-  return match ? match[1] : null;
+async function debugArtistPageSnippet(artistId) {
+  const res = await fetch(ARTIST_PAGE_URL(artistId), { headers: HEADERS });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch artist page: ${res.status} ${res.statusText}`);
+  }
+  const html = await res.text();
+  const idx = html.indexOf('Popular');
+  if (idx === -1) {
+    return { found: false, htmlLength: html.length, sampleStart: html.slice(0, 1000) };
+  }
+  return {
+    found: true,
+    snippet: html.slice(Math.max(0, idx - 200), idx + 2500),
+  };
 }
 
-module.exports = { getStreamCount, parseTrackId };
+module.exports = {
+  getArtistPopularStreams,
+  debugArtistPageSnippet,
+  parseId,
+};
 
-// ---- Quick manual test (run: node spotifyStreamScraper.js <trackId or URL>) ----
+// ---- Quick manual test ----
+// node spotifyStreamScraper.js <artistId or URL>
+// node spotifyStreamScraper.js --debug <artistId or URL>
 if (require.main === module) {
-  const input = process.argv[2];
+  const args = process.argv.slice(2);
+  const isDebug = args[0] === '--debug';
+  const input = isDebug ? args[1] : args[0];
+
   if (!input) {
-    console.log('Usage: node spotifyStreamScraper.js <trackId or full track URL>');
+    console.log('Usage: node spotifyStreamScraper.js [--debug] <artistId or full artist URL>');
     process.exit(1);
   }
-  const trackId = input.includes('spotify.com') ? parseTrackId(input) : input;
-  if (!trackId) {
-    console.error('Could not parse a track ID from that input.');
+
+  const artistId = input.includes('spotify.com') ? parseId(input, 'artist') : input;
+  if (!artistId) {
+    console.error('Could not parse an artist ID from that input.');
     process.exit(1);
   }
-  getStreamCount(trackId)
+
+  const run = isDebug ? debugArtistPageSnippet(artistId) : getArtistPopularStreams(artistId);
+  run
     .then((result) => console.log(JSON.stringify(result, null, 2)))
     .catch((err) => console.error(err));
 }

@@ -23,6 +23,14 @@
  * result directly on `youtubeVideoId` — unchanged from before, so old
  * data keeps working with no migration needed.
  *
+ * QUOTA HANDLING: YouTube's search.list endpoint costs 100 quota
+ * units per call against a 10,000/day free quota — roughly 100
+ * searches/day max. If matchYouTubeVideo() throws a quota-exceeded
+ * error partway through a pass, every remaining track would also fail
+ * for the same reason — so instead of grinding through the rest of
+ * the list generating identical errors, the pass stops immediately
+ * and picks back up on the next scheduled run once quota resets.
+ *
  * Two jobs, meant to run on a schedule:
  *
  *  1. matchApprovedSubmissions()
@@ -44,11 +52,39 @@ const { getViewCountsBatch } = require('../utils/youtubeViewFetcher');
 const { matchYouTubeVideo } = require('../utils/youtubeTrackMatcher');
 const db = admin.firestore();
 
+/**
+ * Detects whether an error thrown by matchYouTubeVideo represents
+ * YouTube's daily quota being exhausted, based on the standard shape
+ * Google's APIs use for this (HTTP 403 with reason "quotaExceeded").
+ * Checks a few common ways this might surface depending on how the
+ * matcher constructs its error, since its exact error format wasn't
+ * available while writing this — adjust the matched strings below if
+ * real logs show a different message once this runs.
+ */
+function isQuotaExceededError(err) {
+  const haystack = [
+    err && err.message,
+    err && err.code,
+    err && err.status,
+    err && err.reason,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
+  return (
+    haystack.includes('quotaexceeded') ||
+    haystack.includes('quota exceeded') ||
+    haystack.includes('dailylimitexceeded') ||
+    (haystack.includes('403') && haystack.includes('quota'))
+  );
+}
+
 /* ---------------------------------------------------------------------
  * JOB 1: MATCH APPROVED SUBMISSIONS TO YOUTUBE VIDEOS (PER TRACK)
  * ------------------------------------------------------------------- */
 /**
- * @returns {Promise<{ checked: number, matched: number, needsReview: number, stillPending: number }>}
+ * @returns {Promise<{ checked: number, matched: number, needsReview: number, stillPending: number, quotaExceeded: boolean }>}
  */
 async function matchApprovedSubmissions() {
   const snap = await db
@@ -57,8 +93,9 @@ async function matchApprovedSubmissions() {
     .get();
 
   let checked = 0, matched = 0, needsReview = 0, stillPending = 0;
+  let quotaExceeded = false;
 
-  for (const doc of snap.docs) {
+  outer: for (const doc of snap.docs) {
     const data = doc.data();
     const hasTrackList = Array.isArray(data.audioFiles) && data.audioFiles.length > 0;
 
@@ -94,6 +131,14 @@ async function matchApprovedSubmissions() {
         try {
           result = await matchYouTubeVideo(trackTitle, artistName);
         } catch (err) {
+          if (isQuotaExceededError(err)) {
+            console.error(`YouTube search quota exceeded — stopping this pass early. Will retry remaining tracks next cycle. (hit while matching ${doc.id} track ${i})`);
+            quotaExceeded = true;
+            if (anyChange) {
+              await doc.ref.set({ youtubeTrackMatches: existingMatches }, { merge: true });
+            }
+            break outer;
+          }
           console.error(`YouTube match failed for ${doc.id} track ${i}: ${err.message}`);
           continue;
         }
@@ -146,6 +191,11 @@ async function matchApprovedSubmissions() {
       try {
         result = await matchYouTubeVideo(trackTitle, artistName);
       } catch (err) {
+        if (isQuotaExceededError(err)) {
+          console.error(`YouTube search quota exceeded — stopping this pass early. Will retry remaining submissions next cycle. (hit while matching ${doc.id})`);
+          quotaExceeded = true;
+          break outer;
+        }
         console.error(`YouTube match failed for ${doc.id}: ${err.message}`);
         continue;
       }
@@ -181,7 +231,7 @@ async function matchApprovedSubmissions() {
     }
   }
 
-  return { checked, matched, needsReview, stillPending };
+  return { checked, matched, needsReview, stillPending, quotaExceeded };
 }
 
 /* ---------------------------------------------------------------------

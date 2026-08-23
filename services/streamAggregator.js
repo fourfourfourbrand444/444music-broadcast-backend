@@ -1,79 +1,156 @@
 /**
  * streamAggregator.js
  *
- * Sums real YouTube view counts across every release belonging to a
- * user, and writes the total into the SAME analytics/{uid} document
- * the Artist Insights dashboard already reads from. Nothing on the
- * frontend needs to change — this just makes the numbers real.
+ * Fully automatic YouTube stream tracking — no manual URL entry.
  *
- * ASSUMES: each submission document may have a `youtubeUrl` field
- * (a plain pasted video link, e.g. https://youtube.com/watch?v=...).
- * Submissions without one are simply skipped — no error, no 0 shown
- * as if it were a real count.
+ * Two jobs, meant to run on a schedule:
+ *
+ *  1. matchApprovedSubmissions()
+ *     Finds "Approved" submissions with no youtubeVideoId yet, searches
+ *     YouTube for each one, and saves a match when confidence is high
+ *     enough. Submissions with no match yet are simply skipped and
+ *     retried next cycle (song not live on YouTube yet — normal).
+ *     Ambiguous matches are flagged (youtubeMatchStatus: 'needs_review')
+ *     instead of guessed.
+ *
+ *  2. refreshAllUsersYouTubeStreams()
+ *     For every user with at least one MATCHED track, fetches current
+ *     view counts and sums them into analytics/{uid}.totalStreams —
+ *     the number the dashboard displays. Unmatched tracks are excluded
+ *     from the sum entirely (never counted as 0).
  */
-
 const admin = require('firebase-admin');
 const { getViewCountsBatch } = require('./youtubeViewFetcher');
-
+const { matchYouTubeVideo } = require('./youtubeTrackMatcher');
 const db = admin.firestore();
 
+/* ---------------------------------------------------------------------
+ * JOB 1: MATCH APPROVED SUBMISSIONS TO YOUTUBE VIDEOS
+ * ------------------------------------------------------------------- */
 /**
- * Recalculates and saves youtubeStreams + totalStreams for ONE user.
+ * @returns {Promise<{ checked: number, matched: number, needsReview: number, stillPending: number }>}
+ */
+async function matchApprovedSubmissions() {
+  const snap = await db
+    .collection('submissions')
+    .where('status', '==', 'Approved')
+    .get();
+
+  let checked = 0, matched = 0, needsReview = 0, stillPending = 0;
+
+  for (const doc of snap.docs) {
+    const data = doc.data();
+
+    // Already matched — nothing to do here (view-count refresh handles it).
+    if (data.youtubeVideoId) continue;
+
+    // Already flagged for manual review — don't re-flag every cycle.
+    if (data.youtubeMatchStatus === 'needs_review') continue;
+
+    const trackTitle = data.releaseTitle || data.songTitle || data.title || '';
+    const artistName = data.artistName || '';
+    if (!trackTitle || !artistName) continue;
+
+    checked++;
+
+    let result;
+    try {
+      result = await matchYouTubeVideo(trackTitle, artistName);
+    } catch (err) {
+      console.error(`YouTube match failed for ${doc.id}: ${err.message}`);
+      continue;
+    }
+
+    if (result.autoAccepted && result.bestMatch) {
+      await doc.ref.set(
+        {
+          youtubeVideoId: result.bestMatch.videoId,
+          youtubeMatchScore: result.score,
+          youtubeMatchStatus: 'matched',
+          youtubeMatchedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      matched++;
+    } else if (result.found && result.candidates.length > 0) {
+      // Found results, but nothing confident enough — flag for a human
+      // instead of guessing wrong (e.g. covers, reuploads, duplicate titles).
+      await doc.ref.set(
+        {
+          youtubeMatchStatus: 'needs_review',
+          youtubeMatchCandidates: result.candidates.map((c) => ({
+            videoId: c.videoId,
+            title: c.title,
+            channelTitle: c.channelTitle,
+            score: c.score,
+          })),
+        },
+        { merge: true }
+      );
+      needsReview++;
+    } else {
+      // Not live on YouTube yet — totally normal, just try again next cycle.
+      stillPending++;
+    }
+  }
+
+  return { checked, matched, needsReview, stillPending };
+}
+
+/* ---------------------------------------------------------------------
+ * JOB 2: REFRESH VIEW COUNTS + ROLL UP TOTALS
+ * ------------------------------------------------------------------- */
+/**
+ * Recalculates and saves youtubeStreams + totalStreams for ONE user,
+ * based on already-matched tracks only.
  *
  * @param {string} userId
- * @returns {Promise<{ userId: string, tracksFound: number, totalViews: number }>}
  */
 async function refreshUserYouTubeStreams(userId) {
   const submissionsSnap = await db
     .collection('submissions')
     .where('userId', '==', userId)
+    .where('youtubeVideoId', '!=', null)
     .get();
 
-  const videoLinks = [];
+  const matchedTracks = [];
   submissionsSnap.forEach((doc) => {
     const data = doc.data();
-    if (data.youtubeUrl) {
-      videoLinks.push({ docId: doc.id, url: data.youtubeUrl });
+    if (data.youtubeVideoId) {
+      matchedTracks.push({ docId: doc.id, videoId: data.youtubeVideoId });
     }
   });
 
-  if (videoLinks.length === 0) {
+  if (matchedTracks.length === 0) {
     return { userId, tracksFound: 0, totalViews: 0 };
   }
 
-  // YouTube's API accepts up to 50 IDs per call — chunk if a user
-  // somehow has more than 50 linked releases.
   const chunks = [];
-  for (let i = 0; i < videoLinks.length; i += 50) {
-    chunks.push(videoLinks.slice(i, i + 50));
+  for (let i = 0; i < matchedTracks.length; i += 50) {
+    chunks.push(matchedTracks.slice(i, i + 50));
   }
 
   let totalViews = 0;
-  const perTrackResults = [];
+  const viewsByVideoId = {};
 
   for (const chunk of chunks) {
-    const urls = chunk.map((v) => v.url);
-    const results = await getViewCountsBatch(urls);
-
-    results.forEach((result) => {
-      if (typeof result.views === 'number') {
-        totalViews += result.views;
+    const ids = chunk.map((t) => t.videoId);
+    const results = await getViewCountsBatch(ids);
+    results.forEach((r) => {
+      if (typeof r.views === 'number') {
+        viewsByVideoId[r.videoId] = r.views;
+        totalViews += r.views;
       }
-      perTrackResults.push(result);
     });
   }
 
-  // Write per-track counts back onto each submission (for the
-  // optional "per-track performance" view later), and roll the
-  // total into analytics/{uid} for the dashboard's hero number.
   const batch = db.batch();
-
-  videoLinks.forEach((link) => {
-    const match = perTrackResults.find((r) => link.url.includes(r.videoId));
-    if (match && typeof match.views === 'number') {
+  matchedTracks.forEach((track) => {
+    const views = viewsByVideoId[track.videoId];
+    if (typeof views === 'number') {
       batch.set(
-        db.collection('submissions').doc(link.docId),
-        { youtubeViews: match.views, youtubeViewsUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
+        db.collection('submissions').doc(track.docId),
+        { youtubeViews: views, youtubeViewsUpdatedAt: admin.firestore.FieldValue.serverTimestamp() },
         { merge: true }
       );
     }
@@ -83,31 +160,27 @@ async function refreshUserYouTubeStreams(userId) {
     db.collection('analytics').doc(userId),
     {
       youtubeStreams: totalViews,
-      totalStreams: totalViews, // update this formula if/when other sources get added back in
+      totalStreams: totalViews, // update this formula if other sources get added back in later
       streamsUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     { merge: true }
   );
 
   await batch.commit();
-
-  return { userId, tracksFound: videoLinks.length, totalViews };
+  return { userId, tracksFound: matchedTracks.length, totalViews };
 }
 
 /**
- * Recalculates YouTube streams for EVERY user who has at least one
- * submission with a youtubeUrl. Meant to be run on a schedule.
- *
- * @returns {Promise<Array<{ userId: string, tracksFound: number, totalViews: number }>>}
+ * Refreshes YouTube streams for EVERY user with at least one matched track.
  */
 async function refreshAllUsersYouTubeStreams() {
-  const submissionsSnap = await db
+  const snap = await db
     .collection('submissions')
-    .where('youtubeUrl', '!=', null)
+    .where('youtubeVideoId', '!=', null)
     .get();
 
   const userIds = new Set();
-  submissionsSnap.forEach((doc) => {
+  snap.forEach((doc) => {
     const data = doc.data();
     if (data.userId) userIds.add(data.userId);
   });
@@ -115,14 +188,16 @@ async function refreshAllUsersYouTubeStreams() {
   const results = [];
   for (const userId of userIds) {
     try {
-      const result = await refreshUserYouTubeStreams(userId);
-      results.push(result);
+      results.push(await refreshUserYouTubeStreams(userId));
     } catch (err) {
       results.push({ userId, error: err.message });
     }
   }
-
   return results;
 }
 
-module.exports = { refreshUserYouTubeStreams, refreshAllUsersYouTubeStreams };
+module.exports = {
+  matchApprovedSubmissions,
+  refreshUserYouTubeStreams,
+  refreshAllUsersYouTubeStreams,
+};

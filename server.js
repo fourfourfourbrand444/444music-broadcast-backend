@@ -17,6 +17,7 @@ const passwordResetRoutes = require('./routes/passwordResetRoutes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
+const { getStreamCount, parseTrackId } = require('./utils/spotifyStreamScraper');
 const app = express();
 const PORT = process.env.PORT || 5000;
 app.set('trust proxy', 1);
@@ -45,6 +46,22 @@ app.use('/api/submissions', submissionRoutes);
 app.use('/api/verification', verificationRoutes);
 app.use('/api/verification', passwordResetRoutes);
 app.use('/api/paystack', paystackRoutes);
+// TEMPORARY — manual test route for the Spotify stream-count scraper.
+// Visit /test-spotify-scrape?url=<spotify track link> in the browser.
+// Remove this once the scraper is wired into a proper scheduled job.
+app.get('/test-spotify-scrape', async (req, res) => {
+  const trackUrl = req.query.url;
+  if (!trackUrl) {
+    return res.status(400).json({ error: 'Add ?url=<spotify track link> to the address' });
+  }
+  const trackId = parseTrackId(trackUrl) || trackUrl;
+  try {
+    const result = await getStreamCount(trackId);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 app.use(notFoundHandler);
 app.use(errorHandler);
 async function startServer() {

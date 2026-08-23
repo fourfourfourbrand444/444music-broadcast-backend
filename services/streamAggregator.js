@@ -20,8 +20,8 @@
  *     from the sum entirely (never counted as 0).
  */
 const admin = require('firebase-admin');
-const { getViewCountsBatch } = require('./youtubeViewFetcher');
-const { matchYouTubeVideo } = require('./youtubeTrackMatcher');
+const { getViewCountsBatch } = require('../utils/youtubeViewFetcher');
+const { matchYouTubeVideo } = require('../utils/youtubeTrackMatcher');
 const db = admin.firestore();
 
 /* ---------------------------------------------------------------------

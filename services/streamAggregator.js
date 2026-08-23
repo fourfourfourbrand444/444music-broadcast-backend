@@ -110,7 +110,6 @@ async function refreshUserYouTubeStreams(userId) {
   const submissionsSnap = await db
     .collection('submissions')
     .where('userId', '==', userId)
-    .where('youtubeVideoId', '!=', null)
     .get();
 
   const matchedTracks = [];
@@ -174,15 +173,12 @@ async function refreshUserYouTubeStreams(userId) {
  * Refreshes YouTube streams for EVERY user with at least one matched track.
  */
 async function refreshAllUsersYouTubeStreams() {
-  const snap = await db
-    .collection('submissions')
-    .where('youtubeVideoId', '!=', null)
-    .get();
+  const snap = await db.collection('submissions').get();
 
   const userIds = new Set();
   snap.forEach((doc) => {
     const data = doc.data();
-    if (data.userId) userIds.add(data.userId);
+    if (data.youtubeVideoId && data.userId) userIds.add(data.userId);
   });
 
   const results = [];

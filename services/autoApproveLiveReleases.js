@@ -265,6 +265,40 @@ async function checkIfLive(spotifyToken, artistName, songTitle) {
   return null;
 }
 
+// A submission's releaseTitle is the EP/Album name, NOT necessarily what's
+// on YouTube — YouTube uploads are per-track, same as streamAggregator.js
+// already accounts for. So: try the release title first (this covers the
+// common case — a single, where release title IS the song title), and if
+// that finds nothing, fall back to checking each individual track title
+// from audioFiles[]. Stops at the very first hit found anywhere.
+async function checkIfLiveForSubmission(spotifyToken, sub) {
+  const releaseTitle = sub.releaseTitle || sub.songTitle || sub.title || '';
+  const artistName = sub.artistName || '';
+
+  if (releaseTitle && artistName) {
+    const result = await checkIfLive(spotifyToken, artistName, releaseTitle);
+    if (result) return result;
+  }
+
+  if (Array.isArray(sub.audioFiles)) {
+    for (const track of sub.audioFiles) {
+      const trackTitle = (track.title || '').trim();
+      if (!trackTitle) continue;
+
+      const mainArtist = Array.isArray(track.artists)
+        ? track.artists.find((a) => a.type === 'main')
+        : null;
+      const trackArtist = (mainArtist && mainArtist.name) || artistName;
+      if (!trackArtist) continue;
+
+      const result = await checkIfLive(spotifyToken, trackArtist, trackTitle);
+      if (result) return result;
+    }
+  }
+
+  return null;
+}
+
 // ── MAIN JOB ─────────────────────────────────────────────────────
 async function checkReviewSubmissionsForLiveRelease() {
   const snap = await db.collection('submissions').where('status', '==', 'Review').get();
@@ -281,7 +315,7 @@ async function checkReviewSubmissionsForLiveRelease() {
 
     checked++;
 
-    const result = await checkIfLive(spotifyToken, artistName, songTitle);
+    const result = await checkIfLiveForSubmission(spotifyToken, sub);
 
     if (result?.quotaExceeded) {
       console.log('YouTube quota exhausted — stopping this pass, will resume next run.');

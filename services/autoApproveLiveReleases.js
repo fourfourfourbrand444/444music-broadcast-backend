@@ -74,14 +74,16 @@
 const admin = require('firebase-admin');
 const db = admin.firestore();
 const { matchYouTubeVideo } = require('../utils/youtubeTrackMatcher');
+// Same helper controllers/submissionController.js already uses for
+// notifyRejection() — sendEmail({ to, subject, html }) -> { success, error }.
+// Reusing it means sender address, Brevo auth, and error handling all stay
+// exactly as they are today; nothing about emailProvider.js needs to change.
+const emailProvider = require('../services/emailProvider');
+const logger = require('../utils/logger');
 
 // ── CONFIG ──────────────────────────────────────────────────────
 const SPOTIFY_CLIENT_ID     = process.env.SPOTIFY_CLIENT_ID;
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-
-const EMAIL_API_KEY = process.env.EMAIL_API_KEY;   // already in Render env (Brevo)
-const FROM_EMAIL     = process.env.FROM_EMAIL;      // already in Render env
-const FROM_NAME       = process.env.FROM_NAME;       // already in Render env
 
 const CATALOG_PREFIX = '444M';
 
@@ -162,33 +164,57 @@ async function nextCatalogNumber() {
   });
 }
 
-// Sends the approval email via Brevo's transactional API directly —
-// same account/sender your rejection emails already use.
+// Builds the approval email HTML — light theme, matching the visual
+// style of buildUserHtml()'s "Submission Received" card in
+// submissionController.js (same fonts, colors, card layout), so this
+// email looks consistent with the rest of your artist-facing emails
+// even though it's built here rather than in that file.
+function buildApprovalHtml({ artistName, songTitle, upc }) {
+  return `
+  <div style="background:#f4f4f5; padding:36px 16px; font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px; margin:0 auto;">
+      <tr>
+        <td align="center" style="padding-bottom:24px;">
+          <div style="width:56px; height:56px; line-height:56px; border-radius:50%; background:#1b7a3d; color:#ffffff; font-size:26px; font-weight:800; text-align:center; margin:0 auto 16px auto;">
+            &#10003;
+          </div>
+          <div style="font-size:22px; font-weight:800; color:#0a0a0a;">Your Release Is Live!</div>
+          <div style="font-size:13.5px; color:#6b6b6b; margin-top:6px;">It's approved and out on streaming platforms.</div>
+        </td>
+      </tr>
+      <tr>
+        <td style="background:#ffffff; border:1px solid #e5e5e5; border-radius:14px; padding:28px 26px;">
+          <p style="font-size:14.5px; color:#1a1a1a; line-height:1.6; margin:0 0 14px 0;">
+            Hi ${escHtml(artistName || 'there')},
+          </p>
+          <p style="font-size:14.5px; color:#1a1a1a; line-height:1.6; margin:0 0 18px 0;">
+            Great news — we found "<strong>${escHtml(songTitle || 'your release')}</strong>" live on streaming platforms and it's now approved.
+          </p>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#e8f9ee; border:1px solid #bfead0; border-radius:10px;">
+            <tr>
+              <td style="padding:13px 16px; font-size:12.5px; color:#1b7a3d; font-weight:700;">
+                Status: Approved${upc ? ` &nbsp;·&nbsp; UPC: ${escHtml(upc)}` : ''}
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </div>`;
+}
+
+// Sends the approval email through the SAME emailProvider.sendEmail()
+// helper notifyRejection() already uses — same Brevo account, same
+// sender config, same error-handling contract ({ success, error }).
 async function sendApprovalEmail({ email, artistName, songTitle, upc }) {
   if (!email) return;
-  try {
-    await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-        'api-key': EMAIL_API_KEY,
-      },
-      body: JSON.stringify({
-        sender: { email: FROM_EMAIL, name: FROM_NAME },
-        to: [{ email, name: artistName || 'Artist' }],
-        subject: `Your release "${songTitle}" is live and approved 🎉`,
-        htmlContent: `
-          <div style="font-family:sans-serif;padding:24px;">
-            <h2>Great news, ${escHtml(artistName || 'Artist')}!</h2>
-            <p>Your release <strong>${escHtml(songTitle || 'Your Release')}</strong> is now live on streaming platforms and has been approved.</p>
-            ${upc ? `<p><strong>UPC:</strong> ${escHtml(upc)}</p>` : ''}
-            <p>— 444Music</p>
-          </div>`,
-      }),
-    });
-  } catch (err) {
-    console.error(`Approval email failed for ${email}:`, err.message);
+  const result = await emailProvider.sendEmail({
+    to: email,
+    subject: `Your release "${songTitle}" is live and approved 🎉`,
+    html: buildApprovalHtml({ artistName, songTitle, upc }),
+  });
+  if (!result.success) {
+    logger.error(`Approval email failed for ${email}: ${result.error}`);
   }
 }
 

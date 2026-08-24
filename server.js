@@ -24,6 +24,9 @@ const {
   matchApprovedSubmissions,
   refreshAllUsersYouTubeStreams,
 } = require('./services/streamAggregator');
+const {
+  checkReviewSubmissionsForLiveRelease,
+} = require('./services/autoApproveLiveReleases');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -103,6 +106,16 @@ app.get('/test-refresh-all-youtube-streams', async (req, res) => {
   }
 });
 
+// TEMPORARY — manually trigger the "check Review submissions for a live
+// release" pass, so you can confirm it works without waiting for 9am.
+app.get('/test-auto-approve', async (req, res) => {
+  try {
+    res.json(await checkReviewSubmissionsForLiveRelease());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // TEMPORARY — inspect submissions flagged 'needs_review' so we can see
 // exactly what they matched to (and why) instead of guessing at fixes.
 app.get('/test-needs-review', async (req, res) => {
@@ -174,6 +187,18 @@ cron.schedule('0 */6 * * *', async () => {
     logger.info(`YouTube streams refresh complete: ${results.length} users updated`);
   } catch (err) {
     logger.error(`YouTube streams refresh failed: ${err.message}`);
+  }
+});
+
+// Once a day at 9am Accra time: check every "Review" submission against
+// YouTube/Spotify/iTunes, and auto-approve the ones that are now live.
+cron.schedule('0 9 * * *', async () => {
+  logger.info('Running scheduled auto-approve pass...');
+  try {
+    const result = await checkReviewSubmissionsForLiveRelease();
+    logger.info(`Auto-approve pass complete: ${JSON.stringify(result)}`);
+  } catch (err) {
+    logger.error(`Auto-approve pass failed: ${err.message}`);
   }
 });
 

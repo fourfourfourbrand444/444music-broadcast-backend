@@ -116,6 +116,34 @@ app.get('/test-auto-approve', async (req, res) => {
   }
 });
 
+// TEMPORARY — dumps the exact artistName/releaseTitle/audioFiles fields
+// for every submission currently at status:"Review", so we can see
+// exactly what's being searched for instead of guessing.
+app.get('/test-review-submissions', async (req, res) => {
+  try {
+    const admin = require('firebase-admin');
+    const db = admin.firestore();
+    const snap = await db.collection('submissions').where('status', '==', 'Review').get();
+    const items = snap.docs.map((doc) => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        artistName: d.artistName,
+        releaseTitle: d.releaseTitle,
+        songTitle: d.songTitle,
+        title: d.title,
+        audioFiles: (d.audioFiles || []).map((f) => ({
+          title: f.title,
+          artists: f.artists,
+        })),
+      };
+    });
+    res.json({ count: items.length, items });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // TEMPORARY — inspect submissions flagged 'needs_review' so we can see
 // exactly what they matched to (and why) instead of guessing at fixes.
 app.get('/test-needs-review', async (req, res) => {

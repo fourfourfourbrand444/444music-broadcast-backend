@@ -21,6 +21,8 @@
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/s3-request-presigner": "^3.600.0",
     "@getbrevo/brevo": "^6.0.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

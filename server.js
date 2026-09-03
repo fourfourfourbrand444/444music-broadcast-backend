@@ -15,6 +15,7 @@ const submissionRoutes = require('./routes/submissionRoutes');
 const verificationRoutes = require('./routes/verificationRoutes');
 const paystackRoutes = require('./routes/paystackRoutes');
 const passwordResetRoutes = require('./routes/passwordResetRoutes');
+const r2Routes = require('./routes/r2Routes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
@@ -58,6 +59,7 @@ app.use('/api/submissions', submissionRoutes);
 app.use('/api/verification', verificationRoutes);
 app.use('/api/verification', passwordResetRoutes);
 app.use('/api/paystack', paystackRoutes);
+app.use('/r2', r2Routes);
 
 // TEMPORARY — manual test route for a single video's view count.
 app.get('/test-youtube-views', async (req, res) => {

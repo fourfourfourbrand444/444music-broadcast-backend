@@ -130,7 +130,7 @@ async function getSpotifyToken() {
 
 async function findOnSpotify(token, artistName, songTitle) {
   const q = encodeURIComponent(`track:${songTitle} artist:${artistName}`);
-  const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${q}&type=track&limit=5`, {
+  const searchRes = await fetch(`https://api.spotify.com/v1/search?q=${q}&type=track&limit=20`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const searchData = await searchRes.json();

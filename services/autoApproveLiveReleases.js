@@ -403,7 +403,6 @@ async function checkReviewSubmissionsForLiveRelease() {
   // already checked once — a missing YouTube link stays a manual
   // paste-in on the admin panel, same as Boomplay/Amazon/Apple Music.
   const approvedSnap = await db.collection('submissions').where('status', '==', 'Approved').get();
-
   for (const docSnap of approvedSnap.docs) {
     const sub = docSnap.data();
     const artistName = sub.artistName || '';
@@ -414,6 +413,14 @@ async function checkReviewSubmissionsForLiveRelease() {
     const updates = {};
     let upcForDeezer = sub.upc || '';
 
+    // BACKFILL — releases approved before SmartLink existed (or
+    // approved manually via admin.html, which never wrote this field)
+    // have no smartLinkSlug at all. Generate one now, once, same as
+    // the main job does at approval time. This never overwrites an
+    // existing slug.
+    if (!sub.smartLinkSlug) {
+      updates.smartLinkSlug = slugify(artistName, songTitle);
+    }
     if (!stores.spotify || !sub.upc) {
       try {
         const spotifyMatch = await findOnSpotify(spotifyToken, artistName, songTitle);

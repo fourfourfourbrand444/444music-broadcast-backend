@@ -2,58 +2,67 @@
  * autoApproveLiveReleases.js
  * ─────────────────────────────────────────────────────────────────
  * Drop into your backend's services/ folder, next to streamAggregator.js.
+ * This is a full rewrite of the existing file — same job, same schedule,
+ * same triggers — with SmartLink capture added on top.
  *
- * WHAT IT DOES
- * Runs on a schedule (wired up via node-cron in server.js — see bottom
- * of this file's setup notes). Checks every submission sitting at
- * status: "Review" — i.e. you've already reviewed it and sent it to
- * your distribution partner, just waiting for it to go live.
+ * WHAT IT DOES (unchanged from before)
+ * Runs on a schedule (node-cron, wired in server.js — see setup notes
+ * at the bottom of this comment block). Checks every submission at
+ * status: "Review" — already reviewed, sent to your distribution
+ * partner, waiting to go live.
  *
  * For each one, it searches:
- *   1. YouTube (via your EXISTING utils/youtubeTrackMatcher.js — same
- *      matcher, same quota handling streamAggregator.js already uses,
- *      so there's no second YouTube-matching system to maintain)
- *   2. Spotify (Client Credentials flow — also gives us the real UPC)
+ *   1. YouTube (via your EXISTING utils/youtubeTrackMatcher.js)
+ *   2. Spotify (Client Credentials flow — also gives us UPC + URL)
  *   3. iTunes (free, no key, last resort)
  *
- * As soon as ANY of them confirms the release is live:
- *   - assigns a catalog number (auto-incrementing counter, same
- *     format your admin panel already uses: 444M-0001, 444M-0002...)
- *   - pulls the real UPC from Spotify if it has matched by then
- *     (if only YouTube has matched so far, UPC stays blank and the
- *     admin's existing "Add UPC / Catalog Number" button on the
- *     Approved card still works exactly as it does today for manual
- *     approvals — nothing about that flow changes)
- *   - sets status: "Approved" (same field your admin panel reads)
- *   - sends the approval email via Brevo — the SAME email service
- *     already configured in your Render env (EMAIL_API_KEY, FROM_EMAIL,
- *     FROM_NAME), the one already sending your rejection emails. No
- *     EmailJS private key needed — that whole extra credential is now
- *     unnecessary for this feature.
+ * As soon as ANY of them confirms the release is live, it:
+ *   - assigns a catalog number (444M-0001, 444M-0002, ...)
+ *   - pulls the real UPC from Spotify if matched by then
+ *   - sets status: "Approved"
+ *   - sends the approval email via Brevo (emailProvider.sendEmail)
  *
- * WHAT IT DOES NOT DO
- * - Never touches "Pending" submissions — only "Review".
- * - Never re-approves something already Approved/Rejected.
- * - Never overwrites a UPC/catalog number that's already set (e.g. if
- *   you'd already manually approved it and it's mid-flight for some
- *   other reason — the query only pulls status:"Review" so this is
- *   naturally impossible, but the code guards it anyway).
+ * WHAT'S NEW — SMARTLINK CAPTURE
+ * The exact same API calls above already return a usable store URL
+ * (Spotify track URL, YouTube video URL, iTunes track URL) — this
+ * rewrite just stops throwing that data away. At the moment a release
+ * is approved, it now also:
+ *   - generates a `smartLinkSlug` (e.g. "hold-on-kobe-denzil")
+ *   - writes whichever store URL was just found into
+ *     `smartLink.stores.{spotify|youtube|itunes}`
  *
- * COST: $0. YouTube reuses your existing key/quota. Spotify free tier.
- * iTunes free, no key. Brevo already paid for/configured.
+ * A second pass (SMARTLINK COMPLETION PASS, replaces the old "UPC
+ * backfill" pass — it does everything that one did, plus more) then
+ * runs over every Approved release and fills in whatever's still
+ * missing:
+ *   - Spotify UPC + URL, if the release was only confirmed via
+ *     YouTube or iTunes
+ *   - Deezer URL, via a free no-auth UPC lookup, once a UPC exists
+ * This pass does NOT re-run the YouTube matcher (to avoid burning
+ * extra quota on releases it already checked once) — if YouTube
+ * didn't match at approval time, it's left for a manual paste-in on
+ * the admin panel, same as Boomplay/Amazon/Apple Music already are.
  *
- * ── ONE-TIME SETUP ──────────────────────────────────────────────
+ * Every release ends up with the SAME `smartLink.stores` shape
+ * whether a link got there automatically or was pasted in manually
+ * by admin.html — the public /l/{slug} page doesn't need to know or
+ * care which happened.
+ *
+ * COST: $0. YouTube reuses your existing key/quota. Spotify + Deezer
+ * are both free tier / no-auth. iTunes free, no key. Brevo already
+ * paid for/configured.
+ *
+ * ── ONE-TIME SETUP (unchanged if you already did this before) ─────
  * 1. npm install node-cron   (in your backend project)
- * 2. Add to Render env vars (Environment tab, same place as the rest):
+ * 2. Render env vars (Environment tab):
  *      SPOTIFY_CLIENT_ID
  *      SPOTIFY_CLIENT_SECRET
  *    (YOUTUBE_API_KEY and the Brevo/EMAIL_* vars are already there.)
- * 3. In your server.js / index.js, add near the top:
+ * 3. In server.js / index.js:
  *
  *      const cron = require('node-cron');
  *      const { checkReviewSubmissionsForLiveRelease } = require('./services/autoApproveLiveReleases');
  *
- *      // Every day at 9am Accra time
  *      cron.schedule('0 9 * * *', () => {
  *        checkReviewSubmissionsForLiveRelease().catch(err =>
  *          console.error('Auto-approve job failed:', err)
@@ -61,23 +70,11 @@
  *      }, { timezone: 'Africa/Accra' });
  *
  * 4. Deploy as usual (git push → Render auto-deploys).
- *
- * NOTE ON EMAIL: this assumes Brevo's transactional email REST API
- * (api.brevo.com) — the standard way EMAIL_PROVIDER=brevo setups send.
- * If your backend's rejection-email code actually calls Brevo
- * differently (e.g. through a wrapper in services/emailProvider.js),
- * swap the body of sendApprovalEmail() below to call that same
- * wrapper instead — just keep the {email, artistName, songTitle, upc}
- * inputs the same so the rest of this file doesn't need to change.
  * ─────────────────────────────────────────────────────────────────
  */
 const admin = require('firebase-admin');
 const db = admin.firestore();
 const { matchYouTubeVideo } = require('../utils/youtubeTrackMatcher');
-// Same helper controllers/submissionController.js already uses for
-// notifyRejection() — sendEmail({ to, subject, html }) -> { success, error }.
-// Reusing it means sender address, Brevo auth, and error handling all stay
-// exactly as they are today; nothing about emailProvider.js needs to change.
 const emailProvider = require('../services/emailProvider');
 const logger = require('../utils/logger');
 
@@ -105,6 +102,17 @@ function normalize(str) {
 function isCloseMatch(a, b) {
   const na = normalize(a), nb = normalize(b);
   return na === nb || na.includes(nb) || nb.includes(na);
+}
+
+// Turns "Kobe Denzil" + "Hold On" into "hold-on-kobe-denzil".
+function slugify(artistName, releaseTitle) {
+  const raw = `${releaseTitle || ''} ${artistName || ''}`;
+  return raw
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2') // camelCase boundary -> hyphen
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
 }
 
 async function getSpotifyToken() {
@@ -154,6 +162,22 @@ async function findOnItunes(artistName, songTitle) {
   return match ? { itunesUrl: match.trackViewUrl } : null;
 }
 
+// Deezer — free, no auth, direct UPC lookup. Only usable once we
+// already have a UPC in hand (from Spotify, either at approval time
+// or via the completion pass below).
+async function findOnDeezer(upc) {
+  if (!upc) return null;
+  try {
+    const res = await fetch(`https://api.deezer.com/2.0/album/upc:${encodeURIComponent(upc)}`);
+    const data = await res.json();
+    if (data && data.error) return null; // Deezer returns {error:...} for no match, not a 404
+    return data && data.link ? { deezerUrl: data.link } : null;
+  } catch (err) {
+    console.error(`Deezer lookup failed for UPC ${upc}:`, err.message);
+    return null;
+  }
+}
+
 async function nextCatalogNumber() {
   const counterRef = db.collection('meta').doc('catalogCounter');
   return db.runTransaction(async (tx) => {
@@ -166,9 +190,7 @@ async function nextCatalogNumber() {
 
 // Builds the approval email HTML — light theme, matching the visual
 // style of buildUserHtml()'s "Submission Received" card in
-// submissionController.js (same fonts, colors, card layout), so this
-// email looks consistent with the rest of your artist-facing emails
-// even though it's built here rather than in that file.
+// submissionController.js.
 function buildApprovalHtml({ artistName, songTitle, upc }) {
   return `
   <div style="background:#f4f4f5; padding:36px 16px; font-family:Arial,Helvetica,sans-serif;">
@@ -203,9 +225,6 @@ function buildApprovalHtml({ artistName, songTitle, upc }) {
   </div>`;
 }
 
-// Sends the approval email through the SAME emailProvider.sendEmail()
-// helper notifyRejection() already uses — same Brevo account, same
-// sender config, same error-handling contract ({ success, error }).
 async function sendApprovalEmail({ email, artistName, songTitle, upc }) {
   if (!email) return;
   const result = await emailProvider.sendEmail({
@@ -236,12 +255,17 @@ function isQuotaExceededError(err) {
 }
 
 // Tries YouTube first (reusing your existing matcher/quota-handling),
-// then Spotify (also gives the UPC), then iTunes as a last resort.
+// then Spotify (also gives UPC + URL), then iTunes as a last resort.
+// Now returns whichever store URL it actually found, not just `via`.
 async function checkIfLive(spotifyToken, artistName, songTitle) {
   try {
     const ytResult = await matchYouTubeVideo(songTitle, artistName);
     if (ytResult && ytResult.autoAccepted && ytResult.bestMatch) {
-      return { via: 'youtube', videoId: ytResult.bestMatch.videoId, upc: null };
+      return {
+        via: 'youtube',
+        upc: null,
+        youtubeUrl: `https://www.youtube.com/watch?v=${ytResult.bestMatch.videoId}`,
+      };
     }
   } catch (err) {
     if (isQuotaExceededError(err)) {
@@ -254,23 +278,26 @@ async function checkIfLive(spotifyToken, artistName, songTitle) {
     console.error(`Spotify check failed for "${songTitle}" by ${artistName}:`, err.message);
     return null;
   });
-  if (spotifyMatch) return { via: 'spotify', upc: spotifyMatch.upc };
+  if (spotifyMatch) {
+    return { via: 'spotify', upc: spotifyMatch.upc, spotifyUrl: spotifyMatch.spotifyUrl };
+  }
 
   const itunesMatch = await findOnItunes(artistName, songTitle).catch((err) => {
     console.error(`iTunes check failed for "${songTitle}" by ${artistName}:`, err.message);
     return null;
   });
-  if (itunesMatch) return { via: 'itunes', upc: null };
+  if (itunesMatch) {
+    return { via: 'itunes', upc: null, itunesUrl: itunesMatch.itunesUrl };
+  }
 
   return null;
 }
 
 // A submission's releaseTitle is the EP/Album name, NOT necessarily what's
-// on YouTube — YouTube uploads are per-track, same as streamAggregator.js
-// already accounts for. So: try the release title first (this covers the
-// common case — a single, where release title IS the song title), and if
-// that finds nothing, fall back to checking each individual track title
-// from audioFiles[]. Stops at the very first hit found anywhere.
+// on YouTube — YouTube uploads are per-track. So: try the release title
+// first (covers the common case — a single), and if that finds nothing,
+// fall back to checking each individual track title from audioFiles[].
+// Stops at the very first hit found anywhere.
 async function checkIfLiveForSubmission(spotifyToken, sub) {
   const releaseTitle = sub.releaseTitle || sub.songTitle || sub.title || '';
   const artistName = sub.artistName || '';
@@ -325,6 +352,15 @@ async function checkReviewSubmissionsForLiveRelease() {
     if (result) {
       const catalogNumber = sub.catalogNumber || (await nextCatalogNumber());
       const upc = result.upc || sub.upc || '';
+      const slug = sub.smartLinkSlug || slugify(artistName, songTitle);
+
+      // Whichever store this particular check found a URL for — build
+      // just that one entry now. Anything else gets filled in by the
+      // completion pass below (or pasted manually in admin.html).
+      const storeUpdates = {};
+      if (result.spotifyUrl) storeUpdates['smartLink.stores.spotify'] = result.spotifyUrl;
+      if (result.youtubeUrl) storeUpdates['smartLink.stores.youtube'] = result.youtubeUrl;
+      if (result.itunesUrl)  storeUpdates['smartLink.stores.itunes']  = result.itunesUrl;
 
       await docSnap.ref.update({
         status: 'Approved',
@@ -336,12 +372,15 @@ async function checkReviewSubmissionsForLiveRelease() {
         rejectionReason: '',
         rejectionCategory: '',
         licenseProofUrl: '',
+        smartLinkSlug: slug,
+        'smartLink.lastAutoCheckedAt': admin.firestore.FieldValue.serverTimestamp(),
+        ...storeUpdates,
       });
 
       await sendApprovalEmail({ email: sub.email, artistName, songTitle, upc });
 
       approved++;
-      console.log(`Approved "${songTitle}" by ${artistName} — live via ${result.via}.`);
+      console.log(`Approved "${songTitle}" by ${artistName} — live via ${result.via}. SmartLink: /l/${slug}`);
     } else {
       const firstChecked = sub.firstCheckedAt?.toDate?.() || new Date();
       const daysSince = (Date.now() - firstChecked.getTime()) / (1000 * 60 * 60 * 24);
@@ -356,29 +395,54 @@ async function checkReviewSubmissionsForLiveRelease() {
     }
   }
 
-  // ── UPC BACKFILL PASS ──────────────────────────────────────────
-  // For releases approved via a YouTube-only match, keep checking
-  // Spotify until the real UPC shows up.
-  const backfillSnap = await db
-    .collection('submissions')
-    .where('status', '==', 'Approved')
-    .where('needsUpcBackfill', '==', true)
-    .get();
+  // ── SMARTLINK COMPLETION PASS ────────────────────────────────────
+  // Runs over every Approved release and fills in whatever's still
+  // missing: Spotify UPC/URL (if only YouTube/iTunes matched at
+  // approval time), then Deezer once a UPC exists. Does NOT re-run
+  // the YouTube matcher, to avoid burning extra quota on releases it
+  // already checked once — a missing YouTube link stays a manual
+  // paste-in on the admin panel, same as Boomplay/Amazon/Apple Music.
+  const approvedSnap = await db.collection('submissions').where('status', '==', 'Approved').get();
 
-  for (const docSnap of backfillSnap.docs) {
+  for (const docSnap of approvedSnap.docs) {
     const sub = docSnap.data();
     const artistName = sub.artistName || '';
     const songTitle = sub.releaseTitle || sub.songTitle || sub.title || '';
     if (!artistName || !songTitle) continue;
 
-    try {
-      const spotifyMatch = await findOnSpotify(spotifyToken, artistName, songTitle);
-      if (spotifyMatch?.upc) {
-        await docSnap.ref.update({ upc: spotifyMatch.upc, needsUpcBackfill: false });
-        console.log(`Backfilled UPC for "${songTitle}" by ${artistName}.`);
+    const stores = (sub.smartLink && sub.smartLink.stores) || {};
+    const updates = {};
+    let upcForDeezer = sub.upc || '';
+
+    if (!stores.spotify || !sub.upc) {
+      try {
+        const spotifyMatch = await findOnSpotify(spotifyToken, artistName, songTitle);
+        if (spotifyMatch) {
+          if (spotifyMatch.upc && !sub.upc) {
+            updates.upc = spotifyMatch.upc;
+            updates.needsUpcBackfill = false;
+            upcForDeezer = spotifyMatch.upc;
+          }
+          if (spotifyMatch.spotifyUrl && !stores.spotify) {
+            updates['smartLink.stores.spotify'] = spotifyMatch.spotifyUrl;
+          }
+        }
+      } catch (err) {
+        console.error(`Spotify completion check failed for "${songTitle}" by ${artistName}:`, err.message);
       }
-    } catch (err) {
-      console.error(`UPC backfill failed for "${songTitle}" by ${artistName}:`, err.message);
+    }
+
+    if (!stores.deezer && upcForDeezer) {
+      const deezerMatch = await findOnDeezer(upcForDeezer);
+      if (deezerMatch?.deezerUrl) {
+        updates['smartLink.stores.deezer'] = deezerMatch.deezerUrl;
+      }
+    }
+
+    if (Object.keys(updates).length > 0) {
+      updates['smartLink.lastAutoCheckedAt'] = admin.firestore.FieldValue.serverTimestamp();
+      await docSnap.ref.update(updates);
+      console.log(`SmartLink completion updated "${songTitle}" by ${artistName}:`, Object.keys(updates));
     }
   }
 

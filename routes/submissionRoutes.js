@@ -16,6 +16,7 @@ const requireAppSecret = require('../middleware/appAuth');
 const { generalLimiter } = require('../middleware/rateLimiter');
 const asyncHandler = require('../utils/asyncHandler');
 const submissionController = require('../controllers/submissionController');
+const { resolveFromSpotifyLink } = require('../services/spotifyLinkResolver');
 router.use(requireAppSecret);
 router.use(generalLimiter);
 // POST /api/submissions/notify
@@ -28,4 +29,27 @@ router.post(
   '/notify-rejection',
   asyncHandler(submissionController.notifyRejection)
 );
+
+// POST /api/submissions/resolve-spotify-link
+// body: { spotifyUrl }
+// Given one Spotify track link, returns its real title/artist/UPC
+// plus whatever was found on YouTube, iTunes, and Deezer. Called
+// from admin.html with the same x-app-secret header already in use
+// there — not exposed to the Flutter app or public.
+router.post(
+  '/resolve-spotify-link',
+  asyncHandler(async (req, res) => {
+    const { spotifyUrl } = req.body;
+    if (!spotifyUrl || !spotifyUrl.trim()) {
+      return res.status(400).json({ success: false, message: 'A Spotify track link is required.' });
+    }
+    try {
+      const result = await resolveFromSpotifyLink(spotifyUrl.trim());
+      res.status(200).json({ success: true, ...result });
+    } catch (err) {
+      res.status(400).json({ success: false, message: err.message });
+    }
+  })
+);
+
 module.exports = router;

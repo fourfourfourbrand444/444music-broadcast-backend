@@ -4,6 +4,18 @@
  * App entrypoint. Wires together Express, security middleware,
  * routes, and error handling. Also initializes Firebase Admin and
  * the email provider on startup.
+ *
+ * CHANGES IN THIS VERSION
+ *  - YouTube tracking now runs ONCE A DAY (10:00 Accra) through
+ *    runYouTubeTrackerDaily(): views refresh first, then matching.
+ *    The old hourly match + 6-hourly refresh jobs are gone. The daily
+ *    search cap, retry timing and rolling bookmark now live inside
+ *    services/streamAggregator.js.
+ *  - A simple lock stops two tracker runs from overlapping.
+ *  - All /test-... routes are now LOCKED. They only work when the
+ *    TEST_ROUTES_KEY environment variable is set on Render, and every
+ *    call must add ?key=<that value>. Without the variable they return
+ *    404, so nobody can burn your YouTube quota through them.
  */
 require('dotenv').config();
 const express = require('express');
@@ -24,6 +36,7 @@ const { matchYouTubeVideo } = require('./utils/youtubeTrackMatcher');
 const {
   matchApprovedSubmissions,
   refreshAllUsersYouTubeStreams,
+  runYouTubeTrackerDaily,
 } = require('./services/streamAggregator');
 const {
   checkReviewSubmissionsForLiveRelease,
@@ -61,8 +74,21 @@ app.use('/api/verification', passwordResetRoutes);
 app.use('/api/paystack', paystackRoutes);
 app.use('/r2', r2Routes);
 
-// TEMPORARY — manual test route for a single video's view count.
-app.get('/test-youtube-views', async (req, res) => {
+/* ---------------------------------------------------------------------
+ * TEST ROUTES — locked behind TEST_ROUTES_KEY
+ * Set TEST_ROUTES_KEY in Render → Environment (any long random text),
+ * then call e.g.  /test-run-tracker?key=YOUR_LONG_RANDOM_TEXT
+ * If the variable is not set, every test route answers 404.
+ * ------------------------------------------------------------------- */
+function requireTestKey(req, res, next) {
+  const expected = process.env.TEST_ROUTES_KEY;
+  if (!expected) return res.status(404).json({ error: 'Not found' });
+  if (req.query.key !== expected) return res.status(403).json({ error: 'Forbidden' });
+  next();
+}
+
+// Manual test for a single video's view count.
+app.get('/test-youtube-views', requireTestKey, async (req, res) => {
   const input = req.query.url;
   if (!input) {
     return res.status(400).json({ error: 'Add ?url=<youtube link or video ID> to the address' });
@@ -74,10 +100,9 @@ app.get('/test-youtube-views', async (req, res) => {
   }
 });
 
-// TEMPORARY — manual test route for the search+match function, so you
-// can sanity-check matching for one track without waiting for the cron.
-// Example: /test-youtube-match?title=Fake%20Smiles&artist=TrapBoyRock
-app.get('/test-youtube-match', async (req, res) => {
+// Manual test for the search+match function (costs 100 quota points per call).
+// Example: /test-youtube-match?title=Fake%20Smiles&artist=TrapBoyRock&key=...
+app.get('/test-youtube-match', requireTestKey, async (req, res) => {
   const { title, artist } = req.query;
   if (!title || !artist) {
     return res.status(400).json({ error: 'Add ?title=<track title>&artist=<artist name>' });
@@ -89,8 +114,21 @@ app.get('/test-youtube-match', async (req, res) => {
   }
 });
 
-// TEMPORARY — manually trigger the "match Approved submissions" pass.
-app.get('/test-match-approved', async (req, res) => {
+// Manually run ONE full daily tracker cycle (views, then matching).
+app.get('/test-run-tracker', requireTestKey, async (req, res) => {
+  if (trackerRunning) return res.status(409).json({ error: 'A tracker run is already in progress.' });
+  trackerRunning = true;
+  try {
+    res.json(await runYouTubeTrackerDaily());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  } finally {
+    trackerRunning = false;
+  }
+});
+
+// Manually run only the matching pass.
+app.get('/test-match-approved', requireTestKey, async (req, res) => {
   try {
     res.json(await matchApprovedSubmissions());
   } catch (err) {
@@ -98,8 +136,8 @@ app.get('/test-match-approved', async (req, res) => {
   }
 });
 
-// TEMPORARY — manually trigger a full view-count refresh for all users.
-app.get('/test-refresh-all-youtube-streams', async (req, res) => {
+// Manually run only the views refresh (one rolling slice).
+app.get('/test-refresh-all-youtube-streams', requireTestKey, async (req, res) => {
   try {
     const results = await refreshAllUsersYouTubeStreams();
     res.json({ usersUpdated: results.length, results });
@@ -108,9 +146,8 @@ app.get('/test-refresh-all-youtube-streams', async (req, res) => {
   }
 });
 
-// TEMPORARY — manually trigger the "check Review submissions for a live
-// release" pass, so you can confirm it works without waiting for 9am.
-app.get('/test-auto-approve', async (req, res) => {
+// Manually run the "check Review submissions for a live release" pass.
+app.get('/test-auto-approve', requireTestKey, async (req, res) => {
   try {
     res.json(await checkReviewSubmissionsForLiveRelease());
   } catch (err) {
@@ -118,10 +155,8 @@ app.get('/test-auto-approve', async (req, res) => {
   }
 });
 
-// TEMPORARY — dumps the exact artistName/releaseTitle/audioFiles fields
-// for every submission currently at status:"Review", so we can see
-// exactly what's being searched for instead of guessing.
-app.get('/test-review-submissions', async (req, res) => {
+// Dumps artistName/releaseTitle/audioFiles for every submission at status "Review".
+app.get('/test-review-submissions', requireTestKey, async (req, res) => {
   try {
     const admin = require('firebase-admin');
     const db = admin.firestore();
@@ -146,9 +181,8 @@ app.get('/test-review-submissions', async (req, res) => {
   }
 });
 
-// TEMPORARY — inspect submissions flagged 'needs_review' so we can see
-// exactly what they matched to (and why) instead of guessing at fixes.
-app.get('/test-needs-review', async (req, res) => {
+// Inspect older (single-track) submissions flagged 'needs_review'.
+app.get('/test-needs-review', requireTestKey, async (req, res) => {
   try {
     const admin = require('firebase-admin');
     const db = admin.firestore();
@@ -194,31 +228,34 @@ async function startServer() {
 }
 startServer();
 
-// Every hour: try to match any newly-Approved submissions to a YouTube
-// video. Runs more often than the view-count refresh below because a
-// song going live on YouTube is the thing we're racing to catch quickly;
-// once matched, cost per cycle is just one search call per unmatched track.
-cron.schedule('0 * * * *', async () => {
-  logger.info('Running scheduled YouTube match pass...');
-  try {
-    const result = await matchApprovedSubmissions();
-    logger.info(`YouTube match pass complete: ${JSON.stringify(result)}`);
-  } catch (err) {
-    logger.error(`YouTube match pass failed: ${err.message}`);
-  }
-});
+/* ---------------------------------------------------------------------
+ * SCHEDULED JOBS
+ * ------------------------------------------------------------------- */
 
-// Every 6 hours: refresh real view counts for all matched tracks and
-// roll them into each user's totalStreams.
-cron.schedule('0 */6 * * *', async () => {
-  logger.info('Running scheduled YouTube streams refresh...');
-  try {
-    const results = await refreshAllUsersYouTubeStreams();
-    logger.info(`YouTube streams refresh complete: ${results.length} users updated`);
-  } catch (err) {
-    logger.error(`YouTube streams refresh failed: ${err.message}`);
+// Once a day at 10:00 Accra time (after the 9:00 auto-approve pass):
+// refresh YouTube view counts first (cheap), then look for songs that
+// have just gone live (capped by the daily search limit inside
+// streamAggregator.js). Each job reads a slice of releases and keeps a
+// bookmark, so big catalogs are covered over several days.
+let trackerRunning = false;
+cron.schedule('0 10 * * *', async () => {
+  if (trackerRunning) {
+    logger.info('YouTube tracker run skipped — the previous run is still in progress.');
+    return;
   }
-});
+  trackerRunning = true;
+  logger.info('Running scheduled YouTube tracker (views, then matching)...');
+  try {
+    const result = await runYouTubeTrackerDaily();
+    logger.info(
+      `YouTube tracker complete: ${result.views.length} user(s) refreshed, match pass ${JSON.stringify(result.match)}`
+    );
+  } catch (err) {
+    logger.error(`YouTube tracker failed: ${err.message}`);
+  } finally {
+    trackerRunning = false;
+  }
+}, { timezone: 'Africa/Accra' });
 
 // Once a day at 9am Accra time: check every "Review" submission against
 // YouTube/Spotify/iTunes, and auto-approve the ones that are now live.
@@ -230,6 +267,6 @@ cron.schedule('0 9 * * *', async () => {
   } catch (err) {
     logger.error(`Auto-approve pass failed: ${err.message}`);
   }
-});
+}, { timezone: 'Africa/Accra' });
 
 module.exports = app;

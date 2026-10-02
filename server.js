@@ -6,6 +6,10 @@
  * the email provider on startup.
  *
  * CHANGES IN THIS VERSION
+ *  - Payout emails: added /api/payout (admin, Firebase login) and
+ *    /api/payout-report (public, signed links). Nothing else changed.
+ *
+ * EARLIER CHANGES
  *  - YouTube tracking now runs ONCE A DAY (10:00 Accra) through
  *    runYouTubeTrackerDaily(): views refresh first, then matching.
  *    The old hourly match + 6-hourly refresh jobs are gone. The daily
@@ -28,6 +32,8 @@ const verificationRoutes = require('./routes/verificationRoutes');
 const paystackRoutes = require('./routes/paystackRoutes');
 const passwordResetRoutes = require('./routes/passwordResetRoutes');
 const r2Routes = require('./routes/r2Routes');
+const payoutRoutes = require('./routes/payoutRoutes');
+const payoutReportRoutes = require('./routes/payoutReportRoutes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
@@ -72,6 +78,8 @@ app.use('/api/submissions', submissionRoutes);
 app.use('/api/verification', verificationRoutes);
 app.use('/api/verification', passwordResetRoutes);
 app.use('/api/paystack', paystackRoutes);
+app.use('/api/payout', payoutRoutes);
+app.use('/api/payout-report', payoutReportRoutes);
 app.use('/r2', r2Routes);
 
 /* ---------------------------------------------------------------------

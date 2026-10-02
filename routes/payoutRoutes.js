@@ -1,16 +1,16 @@
 /**
- * routes/payoutReportRoutes.js
+ * routes/payoutRoutes.js
  *
- * PUBLIC (no login), mounted at /api/payout-report in server.js.
- *   GET /api/payout-report?d=<data>&s=<signature>
- * It only works with a link signed by this server (HMAC with PAYOUT_REPORT_SECRET),
- * and the CSV contains only the rows inside that link.
+ * Admin-only. Mounted at /api/payout in server.js.
+ *   POST /api/payout/notify  ->  sends the payout emails
+ * Protected by the admin's Firebase login (see middleware/requireAdminFirebase.js).
  */
 const express = require('express');
-const { downloadReport } = require('../controllers/payoutController');
+const requireAdminFirebase = require('../middleware/requireAdminFirebase');
+const { notify } = require('../controllers/payoutController');
 
 const router = express.Router();
 
-router.get('/', downloadReport);
+router.post('/notify', requireAdminFirebase, notify);
 
 module.exports = router;

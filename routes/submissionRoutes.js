@@ -16,6 +16,7 @@ const requireAppSecret = require('../middleware/appAuth');
 const { generalLimiter } = require('../middleware/rateLimiter');
 const asyncHandler = require('../utils/asyncHandler');
 const submissionController = require('../controllers/submissionController');
+const approvalController = require('../controllers/approvalController');
 const { resolveFromSpotifyLink } = require('../services/spotifyLinkResolver');
 router.use(requireAppSecret);
 router.use(generalLimiter);
@@ -28,6 +29,17 @@ router.post(
 router.post(
   '/notify-rejection',
   asyncHandler(submissionController.notifyRejection)
+);
+
+// POST /api/submissions/notify-approval
+// body: { submissionId }
+// Sends the approval email (song, UPC, catalog number, stores, login
+// button) through SendPulse. The backend reads the submission from
+// Firestore itself, so the admin page only sends the id. Called from
+// adminpage.html with the same x-app-secret header as notify-rejection.
+router.post(
+  '/notify-approval',
+  asyncHandler(approvalController.notify)
 );
 
 // POST /api/submissions/resolve-spotify-link

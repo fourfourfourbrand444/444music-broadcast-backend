@@ -37,6 +37,7 @@
 const crypto = require('crypto');
 const admin = require('firebase-admin');
 const logger = require('../utils/logger');
+const { getObjectBuffer, isAudioKey } = require('./r2Audio');
 
 // Files are only fetched from Cloudinary. The links on a submission are
 // written from the browser, so anything else is refused.
@@ -311,6 +312,15 @@ function assertAssetUrl(url, label, wrongTypePattern, expectedType) {
   }
 }
 
+// Audio can come from R2 ("r2:audio/<uid>/<id>.wav") or, for older releases, Cloudinary.
+function assertAudioSource(url, label) {
+  if (typeof url === 'string' && url.startsWith('r2:')) {
+    if (!isAudioKey(url.slice(3))) throw new AvvoSendError(`${label} has an invalid file key.`, 400);
+    return;
+  }
+  assertAssetUrl(url, label, NOT_WAV, 'WAV');
+}
+
 // Builds the AVVO request body. The upload ids are placeholders here and are
 // replaced by the real ones after the files are uploaded.
 function buildRelease(data, partnerReleaseId) {
@@ -369,7 +379,7 @@ function buildRelease(data, partnerReleaseId) {
   const tracks = audioFiles.map((t, i) => {
     const n = i + 1;
     const audioUrl = clean(t && t.url);
-    assertAssetUrl(audioUrl, `Track ${n} audio`, NOT_WAV, 'WAV');
+        assertAudioSource(audioUrl, `Track ${n} audio`);
 
     const artistList = Array.isArray(t.artists) ? t.artists : [];
     const mains = uniqueNames(artistList.filter((a) => a && a.type === 'main').map((a) => a.name));
@@ -555,6 +565,27 @@ async function downloadFile(url, label, maxBytes) {
   return buffer;
 }
 
+// Reads one WAV straight from the private R2 bucket (server-side, no public link).
+async function downloadR2(key, label, maxBytes) {
+  let buffer;
+  try {
+    buffer = await getObjectBuffer(key);
+  } catch (e) {
+    const status = (e && e.$metadata && e.$metadata.httpStatusCode) || 0;
+    if (status === 404 || (e && e.name === 'NoSuchKey')) {
+      throw new AvvoApiError(`${label} was not found in R2. It may have been deleted.`, { status: 404 });
+    }
+    throw new AvvoApiError(`Could not read ${label} from R2 (${(e && e.message) || 'unknown error'}).`, {
+      status,
+      retryable: !status || status >= 500,
+    });
+  }
+  if (buffer.length > maxBytes) {
+    throw new AvvoApiError(`${label} is too large (${Math.round(buffer.length / 1048576)} MB).`);
+  }
+  return buffer;
+}
+
 // The upload link AVVO gives us is already signed, so NO Authorization header here.
 async function putFile(uploadUrl, method, contentType, buffer, label) {
   let res;
@@ -582,7 +613,9 @@ async function putFile(uploadUrl, method, contentType, buffer, label) {
 
 // download -> ask AVVO for an upload slot -> upload -> validate
 async function uploadAsset(cfg, spec) {
-  const buffer = await withRetry(() => downloadFile(spec.url, spec.label, spec.maxBytes));
+  const buffer = String(spec.url).startsWith('r2:')
+    ? await withRetry(() => downloadR2(String(spec.url).slice(3), spec.label, spec.maxBytes))
+    : await withRetry(() => downloadFile(spec.url, spec.label, spec.maxBytes));
   const slot = await withRetry(() =>
     avvoRequest(cfg, 'POST', '/uploads', {
       type: spec.type,

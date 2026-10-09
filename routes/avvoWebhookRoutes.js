@@ -3,19 +3,24 @@
  *
  * Receives webhook calls from AVVO Music (POST /api/avvo/webhook).
  *
- * FIRST VERSION — what it does:
+ * WHAT IT DOES
  *  - Stays OFF until AVVO_ENABLED=true is set on Render.
- *  - Checks the secret (AVVO_WEBHOOK_SECRET). It accepts either a plain
- *    secret header or an HMAC-SHA256 signature of the raw body, because
- *    we don't know AVVO's exact method yet. Tighten this once their
- *    docs arrive.
+ *  - Verifies AVVO's signature exactly as their docs describe:
+ *      HMAC-SHA256( secret, "<X-AVVO-Timestamp>.<raw body>" ) as hex,
+ *      compared with the X-AVVO-Signature header.
+ *    Calls older (or newer) than 5 minutes are rejected.
  *  - Saves each event as ONE Firestore write in "avvoWebhookEvents".
- *    No reads. If the event has an id, it is used as the document id,
- *    so a repeated delivery overwrites instead of duplicating.
+ *    No reads. The AVVO event id is the document id, so a retried
+ *    delivery overwrites the same document instead of duplicating.
+ *  - Answers 200 right after saving (AVVO retries anything that is not 2xx).
  *  - Does NOT touch submissions, users or emails yet.
  *
+ * ENVIRONMENT VARIABLES (Render)
+ *  AVVO_ENABLED         true / anything else = off
+ *  AVVO_WEBHOOK_SECRET  the secret you gave to AVVO
+ *
  * Needs express.raw() mounted on this path in server.js (already done
- * there) so the signature can be checked against the untouched body.
+ * there) so the signature is checked against the untouched body.
  */
 const express = require('express');
 const crypto = require('crypto');
@@ -23,34 +28,30 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
+const MAX_AGE_SECONDS = 300; // AVVO's recommended tolerance
+
 function safeEqual(a, b) {
   const A = Buffer.from(String(a));
   const B = Buffer.from(String(b));
-  if (A.length !== B.length) return false;
-  return crypto.timingSafeEqual(A, B);
+  return A.length === B.length && crypto.timingSafeEqual(A, B);
 }
 
-function isValid(req, rawBody, secret) {
-  const h = req.headers;
+function verifySignature(headers, rawBody, secret) {
+  const ts = headers['x-avvo-timestamp'];
+  const signature = headers['x-avvo-signature'];
+  if (!ts || !signature) return false;
 
-  // Option A: the secret is sent as-is in a header.
-  const plain = [
-    h['x-webhook-secret'],
-    h['x-avvo-secret'],
-    (h.authorization || '').replace(/^Bearer\s+/i, ''),
-  ].filter(Boolean);
-  if (plain.some((v) => safeEqual(v, secret))) return true;
+  const tsNum = Number(ts);
+  if (!Number.isFinite(tsNum)) return false;
+  if (Math.abs(Date.now() / 1000 - tsNum) > MAX_AGE_SECONDS) return false;
 
-  // Option B: HMAC-SHA256 signature of the raw body (hex or base64).
-  const sig = h['x-avvo-signature'] || h['x-webhook-signature'] || h['x-signature'];
-  if (sig) {
-    const given = String(sig).replace(/^sha256=/i, '').trim();
-    const hex = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-    const b64 = crypto.createHmac('sha256', secret).update(rawBody).digest('base64');
-    if (safeEqual(given.toLowerCase(), hex) || safeEqual(given, b64)) return true;
-  }
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(`${ts}.${rawBody.toString('utf8')}`)
+    .digest('hex');
 
-  return false;
+  const given = String(signature).trim().replace(/^sha256=/i, '').toLowerCase();
+  return safeEqual(expected, given);
 }
 
 // Simple check that the address is alive (some services ping it with GET).
@@ -71,8 +72,8 @@ router.post('/', async (req, res) => {
 
   const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
 
-  if (!isValid(req, rawBody, secret)) {
-    logger.warn('AVVO webhook: rejected a call with a missing or wrong secret/signature.');
+  if (!verifySignature(req.headers, rawBody, secret)) {
+    logger.warn('AVVO webhook: rejected a call with a bad, missing or expired signature.');
     return res.status(401).json({ success: false, message: 'Unauthorized.' });
   }
 
@@ -81,14 +82,21 @@ router.post('/', async (req, res) => {
   try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
 
   const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  const eventType = String(obj.event || obj.type || obj.eventType || 'unknown');
-  const eventId = obj.id || obj.eventId || obj.event_id || null;
+  const data = obj.data && typeof obj.data === 'object' ? obj.data : {};
+  const eventType = String(obj.event || req.headers['x-avvo-event'] || 'unknown');
+  const eventId = obj.id || null;
 
   try {
     const admin = require('firebase-admin');
     const col = admin.firestore().collection('avvoWebhookEvents');
     const record = {
       eventType,
+      eventId: eventId ? String(eventId) : null,
+      deliveryId: String(req.headers['x-avvo-delivery'] || ''),
+      releaseId: data.release_id ? String(data.release_id) : null,
+      partnerReleaseId: data.partner_release_id ? String(data.partner_release_id) : null,
+      status: data.status ? String(data.status) : null,
+      upc: data.upc ? String(data.upc) : null,
       payloadJson: text.slice(0, 100000), // stored as text so any shape is accepted
       receivedAt: Date.now(),
       processed: false,
@@ -101,7 +109,7 @@ router.post('/', async (req, res) => {
     logger.info(`AVVO webhook: saved event "${eventType}".`);
   } catch (err) {
     logger.error(`AVVO webhook: could not save event: ${err.message}`);
-    // Non-200 so AVVO retries the delivery.
+    // Non-2xx so AVVO retries the delivery.
     return res.status(500).json({ success: false, message: 'Could not save event.' });
   }
 

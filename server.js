@@ -41,6 +41,7 @@ const payoutRoutes = require('./routes/payoutRoutes');
 const payoutReportRoutes = require('./routes/payoutReportRoutes');
 const avvoWebhookRoutes = require('./routes/avvoWebhookRoutes');
 const avvoSendRoutes = require('./routes/avvoSendRoutes');
+const r2AudioRoutes = require('./routes/r2AudioRoutes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
@@ -91,6 +92,7 @@ app.use('/api/payout', payoutRoutes);
 app.use('/api/payout-report', payoutReportRoutes);
 app.use('/api/avvo/webhook', avvoWebhookRoutes);
 app.use('/api/avvo-send', avvoSendRoutes);
+app.use('/api/audio', r2AudioRoutes);
 app.use('/r2', r2Routes);
 
 /* ---------------------------------------------------------------------

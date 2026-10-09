@@ -6,11 +6,13 @@
  * the email provider on startup.
  *
  * CHANGES IN THIS VERSION
- *  - AVVO webhook: added /api/avvo/webhook (routes/avvoWebhookRoutes.js).
- *    It stays OFF until AVVO_ENABLED=true is set on Render. Nothing
- *    else changed.
+ *  - AVVO send: added /api/avvo-send (routes/avvoSendRoutes.js).
+ *    Admin only (Firebase login + ADMIN_EMAILS). It stays OFF until
+ *    AVVO_ENABLED=true is set on Render. Nothing else changed.
  *
  * EARLIER CHANGES
+ *  - AVVO webhook: added /api/avvo/webhook (routes/avvoWebhookRoutes.js).
+ *    It stays OFF until AVVO_ENABLED=true is set on Render.
  *  - Payout emails: added /api/payout (admin, Firebase login) and
  *    /api/payout-report (public, signed links). Nothing else changed.
  *  - YouTube tracking now runs ONCE A DAY (10:00 Accra) through
@@ -38,6 +40,7 @@ const r2Routes = require('./routes/r2Routes');
 const payoutRoutes = require('./routes/payoutRoutes');
 const payoutReportRoutes = require('./routes/payoutReportRoutes');
 const avvoWebhookRoutes = require('./routes/avvoWebhookRoutes');
+const avvoSendRoutes = require('./routes/avvoSendRoutes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
@@ -87,6 +90,7 @@ app.use('/api/paystack', paystackRoutes);
 app.use('/api/payout', payoutRoutes);
 app.use('/api/payout-report', payoutReportRoutes);
 app.use('/api/avvo/webhook', avvoWebhookRoutes);
+app.use('/api/avvo-send', avvoSendRoutes);
 app.use('/r2', r2Routes);
 
 /* ---------------------------------------------------------------------

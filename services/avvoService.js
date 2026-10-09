@@ -90,6 +90,39 @@ function describeError(err) {
   return String(err && err.message ? err.message : err).slice(0, 500);
 }
 
+// fetch() hides the real reason inside err.cause (ENOTFOUND, ECONNREFUSED,
+// certificate errors...). This pulls it out so it can be shown and logged.
+function networkDetail(e) {
+  if (!e) return 'unknown error';
+  if (e.name === 'TimeoutError' || e.name === 'AbortError') return 'timed out';
+  const cause = e.cause || {};
+  const parts = [];
+  if (cause.code) parts.push(cause.code);
+  else if (e.code) parts.push(e.code);
+  const msg = cause.message || e.message;
+  if (msg && !parts.includes(msg)) parts.push(msg);
+  return (parts.join(' - ') || e.name || 'network error').slice(0, 200);
+}
+
+// Retrying will not fix a hostname that does not exist or a bad certificate.
+function networkErrorIsRetryable(e) {
+  if (!e) return true;
+  const code = String((e.cause && e.cause.code) || e.code || '');
+  const text = String((e.cause && e.cause.message) || e.message || '');
+  if (code === 'ENOTFOUND' || code === 'ERR_INVALID_URL') return false;
+  if (/^(CERT_|ERR_TLS_|UNABLE_TO_|DEPTH_ZERO_|SELF_SIGNED_|ERR_SSL_)/.test(code)) return false;
+  if (/certificate|invalid url/i.test(text)) return false;
+  return true;
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).host;
+  } catch (e) {
+    return String(url).slice(0, 60);
+  }
+}
+
 /* ───────────────────────── config ───────────────────────── */
 
 function isEnabled() {
@@ -212,7 +245,7 @@ const LANGUAGE_CODES = {
   afrikaans: 'af', shona: 'sn', wolof: 'wo', lingala: 'ln', tigrinya: 'ti', oromo: 'om',
   malagasy: 'mg', kinyarwanda: 'rw', kirundi: 'rn', sesotho: 'st', setswana: 'tn', tswana: 'tn',
   akan: 'ak', twi: 'ak', fante: 'fat', ga: 'gaa', ewe: 'ee', dagbani: 'dag', dagaare: 'dga',
-   nzema: 'nzi', pidgin: 'pcm', 'nigerian pidgin': 'pcm', 'pidgin english': 'pcm',
+  nzema: 'nzi', pidgin: 'pcm', 'nigerian pidgin': 'pcm', 'pidgin english': 'pcm',
   'русский': 'ru', 'español': 'es', 'français': 'fr', deutsch: 'de', italiano: 'it', 'português': 'pt',
   '日本語': 'ja', '한국어': 'ko', '中文': 'zh', 'العربية': 'ar', 'हिन्दी': 'hi', 'türkçe': 'tr',
   nederlands: 'nl', polski: 'pl', svenska: 'sv', norsk: 'no', suomi: 'fi', dansk: 'da',
@@ -293,7 +326,7 @@ function buildRelease(data, partnerReleaseId) {
 
   const releaseDate = toIsoDate(data.releaseDate);
   if (!releaseDate) throw new AvvoSendError('Release date is missing or not a valid date.', 400);
-   const year = parseInt(releaseDate.slice(0, 4), 10);
+  const year = parseInt(releaseDate.slice(0, 4), 10);
   const minDay = new Date();
   minDay.setUTCHours(0, 0, 0, 0);
   minDay.setUTCDate(minDay.getUTCDate() + 3);
@@ -311,7 +344,7 @@ function buildRelease(data, partnerReleaseId) {
 
   const holder = cleanHolder(data.copyright) || artist;
   const languageCode = languageToCode(data.language);
-    if (clean(data.language) && clean(data.language).toLowerCase() !== 'other' && !languageCode) {
+  if (clean(data.language) && clean(data.language).toLowerCase() !== 'other' && !languageCode) {
     warnings.push(`Language "${clean(data.language)}" has no code in avvoService.js, so no language was sent.`);
   }
 
@@ -380,7 +413,7 @@ function buildRelease(data, partnerReleaseId) {
     territory: 'worldwide',
     tracks: tracks.map((x) => x.track),
   };
-    if (clean(data.genre)) payload.genre = toAvvoGenre(data.genre);
+  if (clean(data.genre)) payload.genre = toAvvoGenre(data.genre);
   if (languageCode) payload.language = languageCode;
   if (lyricists.length) payload.author = lyricists.join(', ');
   if (composers.length) payload.composer = composers.join(', ');
@@ -456,9 +489,10 @@ async function avvoRequest(cfg, method, path, body, extraHeaders) {
   );
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
+  const url = `${cfg.baseUrl}${path}`;
   let res;
   try {
-    res = await fetch(`${cfg.baseUrl}${path}`, {
+    res = await fetch(url, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -466,8 +500,8 @@ async function avvoRequest(cfg, method, path, body, extraHeaders) {
     });
   } catch (e) {
     throw new AvvoApiError(
-      `Could not reach AVVO (${e && e.name === 'TimeoutError' ? 'timed out' : 'network error'}).`,
-      { retryable: true }
+      `Could not reach AVVO at ${hostOf(url)} (${networkDetail(e)}).`,
+      { retryable: networkErrorIsRetryable(e) }
     );
   }
 
@@ -499,7 +533,10 @@ async function downloadFile(url, label, maxBytes) {
   try {
     res = await fetch(url, { signal: AbortSignal.timeout(5 * 60 * 1000) });
   } catch (e) {
-    throw new AvvoApiError(`Could not download ${label} from Cloudinary (network error).`, { retryable: true });
+    throw new AvvoApiError(
+      `Could not download ${label} from Cloudinary (${networkDetail(e)}).`,
+      { retryable: networkErrorIsRetryable(e) }
+    );
   }
   if (!res.ok) {
     throw new AvvoApiError(`Could not download ${label} from Cloudinary (HTTP ${res.status}).`, {
@@ -529,7 +566,10 @@ async function putFile(uploadUrl, method, contentType, buffer, label) {
       signal: AbortSignal.timeout(10 * 60 * 1000),
     });
   } catch (e) {
-    throw new AvvoApiError(`Upload of ${label} to AVVO failed (network error).`, { retryable: true });
+    throw new AvvoApiError(
+      `Upload of ${label} to AVVO failed at ${hostOf(uploadUrl)} (${networkDetail(e)}).`,
+      { retryable: networkErrorIsRetryable(e) }
+    );
   }
   if (!res.ok) {
     const snippet = (await res.text().catch(() => '')).slice(0, 200);
@@ -665,7 +705,7 @@ async function startSend(submissionId, adminInfo) {
     throw err;
   }
 
-  logger.info(`[avvo] ${adminInfo.email} started sending ${submissionId} as ${ids.partnerReleaseId} (${cfg.sandbox ? 'sandbox' : 'LIVE'}).`);
+  logger.info(`[avvo] ${adminInfo.email} started sending ${submissionId} as ${ids.partnerReleaseId} (${cfg.sandbox ? 'sandbox' : 'LIVE'}, host ${hostOf(cfg.baseUrl)}).`);
 
   // Fire and forget. runSend handles its own errors.
   runSend(submissionId, cfg, built, {

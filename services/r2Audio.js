@@ -60,9 +60,15 @@ async function createUploadUrl(uid) {
 }
 
 // Link for playing a file in the browser (valid 1 hour).
-async function createReadUrl(key, expiresIn = 3600) {
+async function createReadUrl(key, expiresIn = 3600, downloadName = '') {
   if (!isAudioKey(key)) throw new Error('Invalid audio key.');
-  const command = new GetObjectCommand({ Bucket: bucket(), Key: key });
+  const params = { Bucket: bucket(), Key: key };
+  if (downloadName) {
+    const safe = String(downloadName).replace(/[^A-Za-z0-9 ._-]/g, '_').slice(0, 120);
+    params.ResponseContentDisposition = `attachment; filename="${safe}.wav"`;
+    params.ResponseContentType = 'audio/wav';
+  }
+  const command = new GetObjectCommand(params);
   return getSignedUrl(getClient(), command, { expiresIn });
 }
 

@@ -6,10 +6,13 @@
  * the email provider on startup.
  *
  * CHANGES IN THIS VERSION
- *  - Payout emails: added /api/payout (admin, Firebase login) and
- *    /api/payout-report (public, signed links). Nothing else changed.
+ *  - AVVO webhook: added /api/avvo/webhook (routes/avvoWebhookRoutes.js).
+ *    It stays OFF until AVVO_ENABLED=true is set on Render. Nothing
+ *    else changed.
  *
  * EARLIER CHANGES
+ *  - Payout emails: added /api/payout (admin, Firebase login) and
+ *    /api/payout-report (public, signed links). Nothing else changed.
  *  - YouTube tracking now runs ONCE A DAY (10:00 Accra) through
  *    runYouTubeTrackerDaily(): views refresh first, then matching.
  *    The old hourly match + 6-hourly refresh jobs are gone. The daily
@@ -34,6 +37,7 @@ const passwordResetRoutes = require('./routes/passwordResetRoutes');
 const r2Routes = require('./routes/r2Routes');
 const payoutRoutes = require('./routes/payoutRoutes');
 const payoutReportRoutes = require('./routes/payoutReportRoutes');
+const avvoWebhookRoutes = require('./routes/avvoWebhookRoutes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
@@ -65,6 +69,8 @@ app.use(cors());
 // The Paystack webhook needs the raw body for signature verification,
 // so it must be mounted BEFORE express.json() touches the request.
 app.use('/api/paystack/webhooks/paystack', express.raw({ type: 'application/json' }));
+// Same for the AVVO webhook: raw body so its signature can be checked.
+app.use('/api/avvo/webhook', express.raw({ type: '*/*', limit: '1mb' }));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static('public'));
@@ -80,6 +86,7 @@ app.use('/api/verification', passwordResetRoutes);
 app.use('/api/paystack', paystackRoutes);
 app.use('/api/payout', payoutRoutes);
 app.use('/api/payout-report', payoutReportRoutes);
+app.use('/api/avvo/webhook', avvoWebhookRoutes);
 app.use('/r2', r2Routes);
 
 /* ---------------------------------------------------------------------

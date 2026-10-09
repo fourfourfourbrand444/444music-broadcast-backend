@@ -212,7 +212,13 @@ const LANGUAGE_CODES = {
   afrikaans: 'af', shona: 'sn', wolof: 'wo', lingala: 'ln', tigrinya: 'ti', oromo: 'om',
   malagasy: 'mg', kinyarwanda: 'rw', kirundi: 'rn', sesotho: 'st', setswana: 'tn', tswana: 'tn',
   akan: 'ak', twi: 'ak', fante: 'fat', ga: 'gaa', ewe: 'ee', dagbani: 'dag', dagaare: 'dga',
-  nzema: 'nzi', pidgin: 'pcm', 'nigerian pidgin': 'pcm', 'pidgin english': 'pcm',
+   nzema: 'nzi', pidgin: 'pcm', 'nigerian pidgin': 'pcm', 'pidgin english': 'pcm',
+  'русский': 'ru', 'español': 'es', 'français': 'fr', deutsch: 'de', italiano: 'it', 'português': 'pt',
+  '日本語': 'ja', '한국어': 'ko', '中文': 'zh', 'العربية': 'ar', 'हिन्दी': 'hi', 'türkçe': 'tr',
+  nederlands: 'nl', polski: 'pl', svenska: 'sv', norsk: 'no', suomi: 'fi', dansk: 'da',
+  'čeština': 'cs', 'română': 'ro', magyar: 'hu', 'ελληνικά': 'el', 'українська': 'uk',
+  "o'zbek": 'uz', 'қазақ': 'kk', 'தமிழ்': 'ta', 'తెలుగు': 'te', 'ไทย': 'th', 'tiếng việt': 'vi',
+  'bahasa indonesia': 'id', 'bahasa melayu': 'ms', filipino: 'fil', kiswahili: 'sw',
 };
 
 function languageToCode(name) {
@@ -229,6 +235,32 @@ function languageToCode(name) {
 }
 
 /* ───────────────────────── submission -> AVVO ───────────────────────── */
+
+const AVVO_GENRES = ['Pop', 'Rock', 'Hip-Hop/Rap', 'R&B', 'Electronic', 'Jazz', 'Classical', 'Country', 'Latin',
+  'Reggaeton', 'K-Pop', 'Indie', 'Metal', 'Punk', 'Blues', 'Soul', 'Funk', 'Disco', 'House', 'Techno', 'Trap',
+  'Drill', 'Afrobeat', 'Dancehall', 'Folk', 'Other'];
+
+function toAvvoGenre(value) {
+  const g = clean(value).toLowerCase();
+  const exact = AVVO_GENRES.find((x) => x.toLowerCase() === g);
+  if (exact) return exact;
+  if (/hip|rap/.test(g)) return 'Hip-Hop/Rap';
+  if (/r&b|rnb|r and b/.test(g)) return 'R&B';
+  if (/afro/.test(g)) return 'Afrobeat';
+  if (/dancehall|reggae/.test(g)) return /reggaeton/.test(g) ? 'Reggaeton' : 'Dancehall';
+  if (/electro|dance|edm/.test(g)) return 'Electronic';
+  if (/alternative|indie/.test(g)) return 'Indie';
+  if (/rock/.test(g)) return 'Rock';
+  if (/metal/.test(g)) return 'Metal';
+  if (/pop/.test(g)) return 'Pop';
+  if (/jazz/.test(g)) return 'Jazz';
+  if (/classic/.test(g)) return 'Classical';
+  if (/country/.test(g)) return 'Country';
+  if (/latin/.test(g)) return 'Latin';
+  if (/soul/.test(g)) return 'Soul';
+  if (/folk/.test(g)) return 'Folk';
+  return 'Other';
+}
 
 function assertAssetUrl(url, label, wrongTypePattern, expectedType) {
   if (!url) throw new AvvoSendError(`${label} is missing on this submission.`, 400);
@@ -261,7 +293,13 @@ function buildRelease(data, partnerReleaseId) {
 
   const releaseDate = toIsoDate(data.releaseDate);
   if (!releaseDate) throw new AvvoSendError('Release date is missing or not a valid date.', 400);
-  const year = parseInt(releaseDate.slice(0, 4), 10);
+   const year = parseInt(releaseDate.slice(0, 4), 10);
+  const minDay = new Date();
+  minDay.setUTCHours(0, 0, 0, 0);
+  minDay.setUTCDate(minDay.getUTCDate() + 3);
+  if (new Date(releaseDate + 'T00:00:00Z') < minDay) {
+    throw new AvvoSendError('Release date must be at least 3 days from today. Ask the artist to pick a later date.', 400);
+  }
 
   const audioFiles = Array.isArray(data.audioFiles) ? data.audioFiles : [];
   if (!audioFiles.length) throw new AvvoSendError('This submission has no audio files.', 400);
@@ -273,7 +311,7 @@ function buildRelease(data, partnerReleaseId) {
 
   const holder = cleanHolder(data.copyright) || artist;
   const languageCode = languageToCode(data.language);
-  if (clean(data.language) && !languageCode) {
+    if (clean(data.language) && clean(data.language).toLowerCase() !== 'other' && !languageCode) {
     warnings.push(`Language "${clean(data.language)}" has no code in avvoService.js, so no language was sent.`);
   }
 
@@ -342,7 +380,7 @@ function buildRelease(data, partnerReleaseId) {
     territory: 'worldwide',
     tracks: tracks.map((x) => x.track),
   };
-  if (clean(data.genre)) payload.genre = clean(data.genre);
+    if (clean(data.genre)) payload.genre = toAvvoGenre(data.genre);
   if (languageCode) payload.language = languageCode;
   if (lyricists.length) payload.author = lyricists.join(', ');
   if (composers.length) payload.composer = composers.join(', ');

@@ -334,8 +334,20 @@ function buildRelease(data, partnerReleaseId) {
   const type = normaliseType(data.releaseType);
   const isSingle = type === 'single';
 
-  const releaseDate = toIsoDate(data.releaseDate);
+   let releaseDate = toIsoDate(data.releaseDate);
+  let dateShift = null;
   if (!releaseDate) throw new AvvoSendError('Release date is missing or not a valid date.', 400);
+   const floorDay = new Date();
+  floorDay.setUTCHours(0, 0, 0, 0);
+  floorDay.setUTCDate(floorDay.getUTCDate() + 3);
+  const floorIso = floorDay.toISOString().slice(0, 10);
+  if (releaseDate < floorIso) {
+    const days = Math.round((floorDay - new Date(releaseDate + 'T00:00:00Z')) / 86400000);
+    dateShift = { from: releaseDate, to: floorIso, days };
+    releaseDate = floorIso;
+    warnings.push(`Release date moved from ${dateShift.from} to ${dateShift.to} (${days} day${days === 1 ? '' : 's'} later) because it was less than 3 days away.`);
+  }
+      
   const year = parseInt(releaseDate.slice(0, 4), 10);
   const minDay = new Date();
   minDay.setUTCHours(0, 0, 0, 0);
@@ -434,9 +446,10 @@ function buildRelease(data, partnerReleaseId) {
   const dsp = String(process.env.AVVO_DSP || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (dsp.length) payload.dsp = dsp;
 
-  return {
+    return {
     payload,
     warnings,
+    dateShift,
     coverUrl,
     trackAudioUrls: tracks.map((x) => x.audioUrl),
   };
@@ -682,6 +695,11 @@ async function runSend(submissionId, cfg, built, ctx) {
       avvoStatus: created.status || 'moderation',
       avvoSentAt: Date.now(),
       avvoSentBy: ctx.adminEmail,
+      ...(built.dateShift ? {
+        releaseDate: `${built.dateShift.to}T00:00:00.000Z`,
+        originalReleaseDate: built.dateShift.from,
+        avvoDateShiftDays: built.dateShift.days,
+      } : {}),
       avvoTracks: (Array.isArray(created.tracks) ? created.tracks : []).map((t) => ({
         trackId: t.track_id || '',
         partnerTrackId: t.partner_track_id || '',
@@ -752,6 +770,7 @@ async function startSend(submissionId, adminInfo) {
     attempt: ids.attempt,
     tracks: built.payload.tracks.length,
     environment: cfg.sandbox ? 'sandbox' : 'live',
+    dateShift: built.dateShift,
     warnings: built.warnings,
   };
 }
@@ -784,6 +803,7 @@ async function previewPayload(submissionId) {
     attempt: ids.attempt,
     warnings: built.warnings,
     payload: built.payload,
+    dateShift: built.dateShift,
   };
 }
 

@@ -43,6 +43,7 @@ const avvoWebhookRoutes = require('./routes/avvoWebhookRoutes');
 const avvoSendRoutes = require('./routes/avvoSendRoutes');
 const r2AudioRoutes = require('./routes/r2AudioRoutes');
 const submissionDeleteRoutes = require('./routes/submissionDeleteRoutes');
+const approvalCleanupRoutes = require('./routes/approvalCleanupRoutes');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
 const emailProvider = require('./services/emailProvider');
 const logger = require('./utils/logger');
@@ -95,6 +96,7 @@ app.use('/api/avvo/webhook', avvoWebhookRoutes);
 app.use('/api/avvo-send', avvoSendRoutes);
 app.use('/api/audio', r2AudioRoutes);
 app.use('/api/submission-delete', submissionDeleteRoutes);
+app.use('/api/approval-cleanup', approvalCleanupRoutes);
 app.use('/r2', r2Routes);
 
 /* ---------------------------------------------------------------------

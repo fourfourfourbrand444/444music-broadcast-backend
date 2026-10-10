@@ -10,8 +10,7 @@
 const express = require('express');
 const admin = require('firebase-admin');
 const logger = require('../utils/logger');
-const { isAudioKey, createUploadUrl, createReadUrl } = require('../services/r2Audio');
-
+const { isAudioKey, createUploadUrl, createReadUrl, deleteKeys } = require('../services/r2Audio');
 const router = express.Router();
 const MAX_AUDIO_BYTES = 120 * 1024 * 1024;
 
@@ -73,6 +72,31 @@ router.get('/play-url', requireUser, async (req, res) => {
   } catch (err) {
     logger.error(`[r2-audio] play-url failed: ${err.message}`);
     return res.status(500).json({ success: false, message: 'Could not create play link.' });
+  }
+});
+
+// Deletes WAVs an artist replaced on the fix page. Only keys that belong to the
+// submission's owner and are NOT used by the submission any more can be deleted.
+router.post('/cleanup', requireUser, async (req, res) => {
+  try {
+    const { submissionId, keys } = req.body || {};
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(String(submissionId || '')) || !Array.isArray(keys) || !keys.length || keys.length > 50) {
+      return res.status(400).json({ success: false, message: 'Invalid request.' });
+    }
+    const snap = await admin.firestore().collection('submissions').doc(submissionId).get();
+    if (!snap.exists) return res.status(404).json({ success: false, message: 'Submission not found.' });
+    const sub = snap.data() || {};
+    if (sub.userId !== req.user.uid && !req.user.isAdmin) {
+      return res.status(403).json({ success: false, message: 'Not allowed.' });
+    }
+    const inUse = new Set((Array.isArray(sub.audioFiles) ? sub.audioFiles : [])
+      .map((f) => String((f && f.url) || '').replace(/^r2:/, '')));
+    const deletable = keys.filter((k) => isAudioKey(k) && !inUse.has(k) && k.startsWith(`audio/${sub.userId}/`));
+    const result = await deleteKeys(deletable);
+    return res.json({ success: true, deleted: result.deleted.length, skipped: keys.length - deletable.length });
+  } catch (err) {
+    logger.error(`[r2-audio] cleanup failed: ${err.message}`);
+    return res.status(500).json({ success: false, message: 'Could not clean up files.' });
   }
 });
 

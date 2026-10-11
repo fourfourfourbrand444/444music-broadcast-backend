@@ -25,6 +25,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
+const { handleAvvoEvent } = require('../services/avvoApprovalService');
 
 const router = express.Router();
 
@@ -84,7 +85,8 @@ router.post('/', async (req, res) => {
   const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   const data = obj.data && typeof obj.data === 'object' ? obj.data : {};
   const eventType = String(obj.event || req.headers['x-avvo-event'] || 'unknown');
-  const eventId = obj.id || null;
+   const eventId = obj.id || null;
+  let eventRef = null;
 
   try {
     const admin = require('firebase-admin');
@@ -101,10 +103,11 @@ router.post('/', async (req, res) => {
       receivedAt: Date.now(),
       processed: false,
     };
-    if (eventId) {
-      await col.doc(String(eventId).replace(/[\/\s]/g, '_').slice(0, 200)).set(record);
+        if (eventId) {
+      eventRef = col.doc(String(eventId).replace(/[\/\s]/g, '_').slice(0, 200));
+      await eventRef.set(record);
     } else {
-      await col.add(record);
+      eventRef = await col.add(record);
     }
     logger.info(`AVVO webhook: saved event "${eventType}".`);
   } catch (err) {
@@ -113,7 +116,21 @@ router.post('/', async (req, res) => {
     return res.status(500).json({ success: false, message: 'Could not save event.' });
   }
 
-  return res.status(200).json({ success: true });
+   res.status(200).json({ success: true });
+
+  // AVVO has its 200 already. Now update the submission; problems are logged and saved on the event.
+  try {
+    const out = await handleAvvoEvent({
+      partnerReleaseId: data.partner_release_id,
+      status: data.status,
+      upc: data.upc,
+    });
+    if (eventRef) await eventRef.update({ processed: true, processedAt: Date.now(), result: JSON.stringify(out).slice(0, 500) });
+  } catch (err) {
+    logger.error(`AVVO webhook: could not apply event: ${err.message}`);
+    if (eventRef) await eventRef.update({ processError: String(err.message).slice(0, 300) }).catch(() => {});
+  }
+  return;
 });
 
 module.exports = router;

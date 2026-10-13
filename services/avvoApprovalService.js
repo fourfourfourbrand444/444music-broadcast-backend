@@ -1,108 +1,140 @@
 /**
- * services/avvoApprovalService.js
+ * routes/avvoWebhookRoutes.js
  *
- * Applies one AVVO webhook event to a submission.
+ * Receives webhook calls from AVVO Music (POST /api/avvo/webhook).
  *
- * Render setting:
- *   AVVO_APPROVED_STATUSES  comma list of AVVO status words that mean "approve it",
- *                           for example: awaiting_release
- *                           Spaces, dashes and capitals do not matter ("Awaiting release" = awaiting_release).
- *                           Empty or missing = no release is ever approved by the webhook.
+ * WHAT IT DOES
+ *  - Stays OFF until AVVO_ENABLED=true is set on Render.
+ *  - Verifies AVVO's signature exactly as their docs describe:
+ *      HMAC-SHA256( secret, "<X-AVVO-Timestamp>.<raw body>" ) as hex,
+ *      compared with the X-AVVO-Signature header.
+ *    Calls older (or newer) than 5 minutes are rejected.
+ *  - Saves each event as ONE Firestore write in "avvoWebhookEvents".
+ *    No reads. The AVVO event id is the document id, so a retried
+ *    delivery overwrites the same document instead of duplicating.
+ *  - Answers 200 right after saving (AVVO retries anything that is not 2xx).
+ *  - Then applies the event to the submission (approve on the approved
+ *    status, reject on "returned" with data.moderation.comment as the reason).
+ *
+ * ENVIRONMENT VARIABLES (Render)
+ *  AVVO_ENABLED         true / anything else = off
+ *  AVVO_WEBHOOK_SECRET  the secret you gave to AVVO
+ *
+ * Needs express.raw() mounted on this path in server.js (already done
+ * there) so the signature is checked against the untouched body.
  */
-const admin = require('firebase-admin');
+const express = require('express');
+const crypto = require('crypto');
 const logger = require('../utils/logger');
-const { sendApprovalEmail } = require('./approvalNotifyService');
-const { deleteApprovedAudio } = require('./audioCleanup');
-const { submissionIdFromPartnerReleaseId } = require('./avvoService');
+const { handleAvvoEvent } = require('../services/avvoApprovalService');
 
-const norm = (s) => String(s == null ? '' : s).trim().toLowerCase().replace(/[\s-]+/g, '_');
-const approvedList = () => String(process.env.AVVO_APPROVED_STATUSES || '').split(',').map(norm).filter(Boolean);
+const router = express.Router();
 
-function slugify(str) {
-  return String(str || '')
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+const MAX_AGE_SECONDS = 300; // AVVO's recommended tolerance
+
+function safeEqual(a, b) {
+  const A = Buffer.from(String(a));
+  const B = Buffer.from(String(b));
+  return A.length === B.length && crypto.timingSafeEqual(A, B);
 }
 
-async function uniqueSlug(db, title, artist, excludeId) {
-  const base = slugify(`${title} ${artist}`) || 'release';
-  let slug = base;
-  for (let n = 2; n < 50; n++) {
-    const snap = await db.collection('submissions').where('smartLinkSlug', '==', slug).limit(1).get();
-    if (snap.empty || snap.docs[0].id === excludeId) return slug;
-    slug = `${base}-${n}`;
-  }
-  return `${base}-${Date.now()}`;
+function verifySignature(headers, rawBody, secret) {
+  const ts = headers['x-avvo-timestamp'];
+  const signature = headers['x-avvo-signature'];
+  if (!ts || !signature) return false;
+
+  const tsNum = Number(ts);
+  if (!Number.isFinite(tsNum)) return false;
+  if (Math.abs(Date.now() / 1000 - tsNum) > MAX_AGE_SECONDS) return false;
+
+  const expected = crypto
+    .createHmac('sha256', secret)
+    .update(`${ts}.${rawBody.toString('utf8')}`)
+    .digest('hex');
+
+  const given = String(signature).trim().replace(/^sha256=/i, '').toLowerCase();
+  return safeEqual(expected, given);
 }
 
-async function handleAvvoEvent({ partnerReleaseId, status, upc }) {
-  if (!partnerReleaseId) return { handled: false, reason: 'no_partner_release_id' };
+// Simple check that the address is alive (some services ping it with GET).
+router.get('/', (req, res) => {
+  res.status(200).json({ ok: true });
+});
 
-  const db = admin.firestore();
-  const id = submissionIdFromPartnerReleaseId(partnerReleaseId);
-  const ref = db.collection('submissions').doc(id);
-  const snap = await ref.get();
-  if (!snap.exists) return { handled: false, reason: 'submission_not_found' };
-  const d = snap.data() || {};
-
-  const update = {};
-  if (status) {
-    update.avvoStatus = String(status);
-    update.avvoStatusAt = Date.now();
+router.post('/', async (req, res) => {
+  if (process.env.AVVO_ENABLED !== 'true') {
+    return res.status(503).json({ success: false, message: 'AVVO integration is switched off.' });
   }
 
-  const shouldApprove =
-    !!status &&
-    approvedList().includes(norm(status)) &&
-    String(d.status || '').trim().toLowerCase() === 'review';
-
-  if (!shouldApprove) {
-    if (Object.keys(update).length) await ref.update(update);
-    return { handled: true, approved: false };
+  const secret = process.env.AVVO_WEBHOOK_SECRET;
+  if (!secret) {
+    logger.error('AVVO webhook: AVVO_WEBHOOK_SECRET is not set.');
+    return res.status(500).json({ success: false, message: 'Webhook is not configured.' });
   }
 
-  const finalUpc = String(upc || d.upc || '').trim();
-  Object.assign(update, {
-    status: 'Approved',
-    rejectionReason: '',
-    rejectionCategory: '',
-    licenseProofUrl: '',
-    takedownReason: '',
-    approvedBy: 'avvo-webhook',
-    approvedAt: Date.now(),
-  });
-  if (finalUpc) update.upc = finalUpc;
-  if (!d.smartLinkSlug) {
-    update.smartLinkSlug = await uniqueSlug(db, d.releaseTitle || d.songTitle || d.title || '', d.artistName || '', id);
-  }
-  await ref.update(update);
-  logger.info(`[avvo-approval] ${id} approved by AVVO status "${status}".`);
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
 
-  const result = { handled: true, approved: true, emailSent: false, audioDeleted: 0 };
-
-  if (finalUpc) {
-    try {
-      const out = await sendApprovalEmail(id);
-      result.emailSent = !!(out && out.success);
-      if (!result.emailSent) logger.error(`[avvo-approval] ${id}: approval email failed: ${out && out.message}`);
-    } catch (err) {
-      logger.error(`[avvo-approval] ${id}: approval email error: ${err.message}`);
-    }
-  } else {
-    result.note = 'no_upc_so_no_email';
-    logger.warn(`[avvo-approval] ${id}: no UPC yet, approval email not sent.`);
+  if (!verifySignature(req.headers, rawBody, secret)) {
+    logger.warn('AVVO webhook: rejected a call with a bad, missing or expired signature.');
+    return res.status(401).json({ success: false, message: 'Unauthorized.' });
   }
+
+  const text = rawBody.toString('utf8');
+  let parsed = null;
+  try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+
+  const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  const data = obj.data && typeof obj.data === 'object' ? obj.data : {};
+  const eventType = String(obj.event || req.headers['x-avvo-event'] || 'unknown');
+  const eventId = obj.id || null;
+  const moderationComment =
+    data.moderation && typeof data.moderation === 'object' ? data.moderation.comment : null;
+  let eventRef = null;
 
   try {
-    const out = await deleteApprovedAudio(id);
-    result.audioDeleted = out.deleted || 0;
+    const admin = require('firebase-admin');
+    const col = admin.firestore().collection('avvoWebhookEvents');
+    const record = {
+      eventType,
+      eventId: eventId ? String(eventId) : null,
+      deliveryId: String(req.headers['x-avvo-delivery'] || ''),
+      releaseId: data.release_id ? String(data.release_id) : null,
+      partnerReleaseId: data.partner_release_id ? String(data.partner_release_id) : null,
+      status: data.status ? String(data.status) : null,
+      upc: data.upc ? String(data.upc) : null,
+      payloadJson: text.slice(0, 100000), // stored as text so any shape is accepted
+      receivedAt: Date.now(),
+      processed: false,
+    };
+    if (eventId) {
+      eventRef = col.doc(String(eventId).replace(/[\/\s]/g, '_').slice(0, 200));
+      await eventRef.set(record);
+    } else {
+      eventRef = await col.add(record);
+    }
+    logger.info(`AVVO webhook: saved event "${eventType}".`);
   } catch (err) {
-    logger.error(`[avvo-approval] ${id}: audio cleanup error: ${err.message}`);
+    logger.error(`AVVO webhook: could not save event: ${err.message}`);
+    // Non-2xx so AVVO retries the delivery.
+    return res.status(500).json({ success: false, message: 'Could not save event.' });
   }
-  return result;
-}
 
-module.exports = { handleAvvoEvent };
+  res.status(200).json({ success: true });
+
+  // AVVO has its 200 already. Now update the submission; problems are logged and saved on the event.
+  try {
+    const out = await handleAvvoEvent({
+      partnerReleaseId: data.partner_release_id,
+      status: data.status,
+      upc: data.upc,
+      moderationComment,
+    });
+    if (eventRef) await eventRef.update({ processed: true, processedAt: Date.now(), result: JSON.stringify(out).slice(0, 500) });
+  } catch (err) {
+    logger.error(`AVVO webhook: could not apply event: ${err.message}`);
+    if (eventRef) await eventRef.update({ processError: String(err.message).slice(0, 300) }).catch(() => {});
+  }
+  return;
+});
+
+module.exports = router;

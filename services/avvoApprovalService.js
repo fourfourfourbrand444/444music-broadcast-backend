@@ -7,7 +7,7 @@
  *   AVVO_APPROVED_STATUSES  comma list of AVVO status words that mean "approve it",
  *                           for example: scheduled
  *                           Spaces, dashes and capitals do not matter.
- *                           Empty or missing = no release is ever approved by the webhook.
+ *                           Empty or missing = no release is ever approved by the webhook
  *
  * AVVO status "returned" = rejected. The reason comes from data.moderation.comment.
  */

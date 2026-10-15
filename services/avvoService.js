@@ -7,18 +7,20 @@
  *   1. Checks AVVO is switched on (AVVO_ENABLED=true) and the key matches the URL
  *      (a test key can only be used with the sandbox URL, a live key only with live).
  *   2. Reads the submission from Firestore (1 read) and checks it can be sent.
- *   3. Converts it to AVVO's format (language code, Yes/No -> true/false,
+ *   3. Makes sure the submission has a UNIQUE catalog number (generates one if needed).
+ *   4. Converts it to AVVO's format (language code, Yes/No -> true/false,
  *      copyright year from release date, credits split, and so on).
- *   4. Downloads the cover and each WAV from Cloudinary and uploads them to AVVO.
- *   5. Creates the release at AVVO (with an Idempotency-Key).
- *   6. Saves the result back on the submission (1 write at the end, 1 at the start).
+ *   5. Downloads the cover and each WAV and uploads them to AVVO.
+ *   6. Creates the release at AVVO (with an Idempotency-Key).
+ *   7. Saves the result back on the submission.
  *
- * The long part (steps 4-6) runs in the background, because it can take
+ * The long part (steps 5-7) runs in the background, because it can take
  * longer than a browser request is allowed to stay open. The admin page reads
  * avvoSendState / avvoStatus from the submission to see how it went.
  *
  * Fields this file writes on the submission (it never touches status, upc,
  * isrc, payment, emails or anything else):
+ *   catalogNumber        only when the submission had none, or it was used twice
  *   avvoSendState        'sending' | 'sent' | 'failed'
  *   avvoSendStartedAt    ms timestamp
  *   avvoReleaseId        AVVO's release id
@@ -28,8 +30,20 @@
  *   avvoTracks           [{ trackId, partnerTrackId, title, isrc }]
  *   avvoSentAt, avvoSentBy, avvoWarnings, avvoLastError, avvoLastErrorAt
  *
- * Not sent to AVVO because AVVO has no field for them: musicians, version,
- * previous release info, artist Spotify/Apple URLs, catalog number, phone.
+ * Firestore: it also keeps a counter in  counters/catalogNumber  { last: N }.
+ *
+ * Render settings (all optional):
+ *   AVVO_CATALOG_FIELD          name of AVVO's catalog field. Default: catalog_number.
+ *                               Set to "off" to stop sending it.
+ *   AVVO_DSP                    "spotify,apple_music,youtube_music,..." store list
+ *   AVVO_YOUTUBE_CONTENT_ID     true / false   (unset = not sent)
+ *   AVVO_YOUTUBE_MUSIC          true / false
+ *   AVVO_TIKTOK_MONETIZATION    true / false
+ *   AVVO_FACEBOOK_MONETIZATION  true / false
+ *   AVVO_SOUNDEXCHANGE          true / false
+ *
+ * Not sent to AVVO because AVVO has no documented field for them: musicians,
+ * version, previous release info, artist Spotify/Apple URLs, phone.
  *
  * Needs Node 18+ (built-in fetch). No new npm packages.
  */
@@ -48,6 +62,8 @@ const MAX_COVER_BYTES = 40 * 1024 * 1024;
 const STALE_SENDING_MS = 20 * 60 * 1000; // a "sending" mark older than this is treated as dead
 const RETRY_DELAYS_MS = [1000, 3000, 8000];
 const MAX_RETRY_WAIT_MS = 30 * 1000;
+
+const CATALOG_PREFIX = '444M-';
 
 const NOT_WAV = /\.(mp3|m4a|aac|ogg|flac|wma|mp4)(\?|#|$)/i;
 const NOT_JPG = /\.(png|gif|webp|bmp|tiff?)(\?|#|$)/i;
@@ -158,6 +174,14 @@ function getConfig() {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const clean = (v) => String(v == null ? '' : v).trim();
+
+// Reads a true/false Render setting. Unset or anything else = undefined (not sent).
+function envFlag(name) {
+  const v = clean(process.env[name]).toLowerCase();
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  return undefined;
+}
 
 function uniqueNames(list) {
   const out = [];
@@ -321,6 +345,41 @@ function assertAudioSource(url, label) {
   assertAssetUrl(url, label, NOT_WAV, 'WAV');
 }
 
+/* ───────────────────────── catalog number ───────────────────────── */
+
+function submissionRef(submissionId) {
+  return admin.firestore().collection('submissions').doc(submissionId);
+}
+
+// Every release must carry a catalog number that no other release uses.
+//  - Keeps the number already on the submission if nobody else has it.
+//  - Otherwise takes the next number from counters/catalogNumber (atomic, never repeats)
+//    and saves it on the submission, e.g. 444M-000123.
+async function ensureCatalogNumber(submissionId, data) {
+  const db = admin.firestore();
+  const current = clean(data.catalogNumber);
+
+  if (current) {
+    const same = await db.collection('submissions').where('catalogNumber', '==', current).limit(5).get();
+    const usedByAnother = same.docs.some((d) => d.id !== submissionId);
+    if (!usedByAnother) return current;
+    logger.warn(`[avvo] catalog number ${current} on ${submissionId} is used by another release, assigning a new one.`);
+  }
+
+  const counterRef = db.collection('counters').doc('catalogNumber');
+  const next = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(counterRef);
+    const last = snap.exists ? Number(snap.data().last) || 0 : 0;
+    const n = last + 1;
+    tx.set(counterRef, { last: n }, { merge: true });
+    return n;
+  });
+
+  const value = `${CATALOG_PREFIX}${String(next).padStart(6, '0')}`;
+  await submissionRef(submissionId).update({ catalogNumber: value });
+  return value;
+}
+
 // Builds the AVVO request body. The upload ids are placeholders here and are
 // replaced by the real ones after the files are uploaded.
 function buildRelease(data, partnerReleaseId) {
@@ -334,10 +393,10 @@ function buildRelease(data, partnerReleaseId) {
   const type = normaliseType(data.releaseType);
   const isSingle = type === 'single';
 
-   let releaseDate = toIsoDate(data.releaseDate);
+  let releaseDate = toIsoDate(data.releaseDate);
   let dateShift = null;
   if (!releaseDate) throw new AvvoSendError('Release date is missing or not a valid date.', 400);
-   const floorDay = new Date();
+  const floorDay = new Date();
   floorDay.setUTCHours(0, 0, 0, 0);
   floorDay.setUTCDate(floorDay.getUTCDate() + 3);
   const floorIso = floorDay.toISOString().slice(0, 10);
@@ -347,7 +406,7 @@ function buildRelease(data, partnerReleaseId) {
     releaseDate = floorIso;
     warnings.push(`Release date moved from ${dateShift.from} to ${dateShift.to} (${days} day${days === 1 ? '' : 's'} later) because it was less than 3 days away.`);
   }
-      
+
   const year = parseInt(releaseDate.slice(0, 4), 10);
   const minDay = new Date();
   minDay.setUTCHours(0, 0, 0, 0);
@@ -391,7 +450,7 @@ function buildRelease(data, partnerReleaseId) {
   const tracks = audioFiles.map((t, i) => {
     const n = i + 1;
     const audioUrl = clean(t && t.url);
-        assertAudioSource(audioUrl, `Track ${n} audio`);
+    assertAudioSource(audioUrl, `Track ${n} audio`);
 
     const artistList = Array.isArray(t.artists) ? t.artists : [];
     const mains = uniqueNames(artistList.filter((a) => a && a.type === 'main').map((a) => a.name));
@@ -441,12 +500,35 @@ function buildRelease(data, partnerReleaseId) {
   if (composers.length) payload.composer = composers.join(', ');
   if (isSingle && tracks[0].feats.length) payload.feat_artist = tracks[0].feats.join(', ');
 
+  // Catalog number. AVVO's panel shows "Catalog #" and AVVO asked for it on every release.
+  // The field name below is our best match; AVVO_CATALOG_FIELD on Render overrides it
+  // once AVVO confirms the exact name. Set it to "off" to stop sending it.
+  const catalogField = clean(process.env.AVVO_CATALOG_FIELD) || 'catalog_number';
+  const catalogNumber = clean(data.catalogNumber);
+  if (catalogField.toLowerCase() !== 'off') {
+    if (catalogNumber) payload[catalogField] = catalogNumber;
+    else warnings.push('This submission has no catalog number, so none was sent.');
+  }
+
+  // Optional distribution flags. Each one is sent only when set on Render.
+  // They decide how AVVO claims and monetizes the music, so none is on by default.
+  [
+    ['youtube_content_id', 'AVVO_YOUTUBE_CONTENT_ID'],
+    ['youtube_music', 'AVVO_YOUTUBE_MUSIC'],
+    ['tiktok_monetization', 'AVVO_TIKTOK_MONETIZATION'],
+    ['facebook_monetization', 'AVVO_FACEBOOK_MONETIZATION'],
+    ['soundexchange', 'AVVO_SOUNDEXCHANGE'],
+  ].forEach(([field, envName]) => {
+    const value = envFlag(envName);
+    if (value !== undefined) payload[field] = value;
+  });
+
   // Optional: AVVO_DSP="spotify,apple_music,..." sends a store list.
-  // Left unset, dsp is left out and AVVO decides (to be confirmed with AVVO / sandbox).
+  // Left unset, dsp is left out and AVVO decides.
   const dsp = String(process.env.AVVO_DSP || '').split(',').map((s) => s.trim()).filter(Boolean);
   if (dsp.length) payload.dsp = dsp;
 
-    return {
+  return {
     payload,
     warnings,
     dateShift,
@@ -646,10 +728,6 @@ async function uploadAsset(cfg, spec) {
 
 /* ───────────────────────── the send itself ───────────────────────── */
 
-function submissionRef(submissionId) {
-  return admin.firestore().collection('submissions').doc(submissionId);
-}
-
 // Runs in the background. Never throws: any failure is saved on the submission.
 async function runSend(submissionId, cfg, built, ctx) {
   const ref = submissionRef(submissionId);
@@ -729,7 +807,7 @@ async function runSend(submissionId, cfg, built, ctx) {
 }
 
 // Checks everything, marks the submission as "sending", starts the background job.
-// Throws AvvoSendError if it cannot be sent (nothing is written in that case).
+// Throws AvvoSendError if it cannot be sent (nothing is marked as sending in that case).
 async function startSend(submissionId, adminInfo) {
   const cfg = getConfig();
   if (inFlight.has(submissionId)) {
@@ -740,6 +818,9 @@ async function startSend(submissionId, adminInfo) {
   const snap = await ref.get();
   const data = snap.exists ? snap.data() : null;
   assertSendable(data);
+
+  // Every release gets a unique catalog number before it is built.
+  data.catalogNumber = await ensureCatalogNumber(submissionId, data);
 
   const ids = partnerIdFor(submissionId, data);
   const built = buildRelease(data, ids.partnerReleaseId);
@@ -775,7 +856,8 @@ async function startSend(submissionId, adminInfo) {
   };
 }
 
-// Read-only: shows what WOULD be sent. Calls nothing at AVVO, uploads nothing.
+// Read-only: shows what WOULD be sent. Calls nothing at AVVO, uploads nothing,
+// and writes nothing (a missing catalog number is only generated at send time).
 async function previewPayload(submissionId) {
   if (!isEnabled()) {
     throw new AvvoSendError('AVVO is switched off (AVVO_ENABLED is not true).', 503);

@@ -10,10 +10,12 @@
  *      compared with the X-AVVO-Signature header.
  *    Calls older (or newer) than 5 minutes are rejected.
  *  - Saves each event as ONE Firestore write in "avvoWebhookEvents".
- *    No reads. The AVVO event id is the document id, so a retried
- *    delivery overwrites the same document instead of duplicating.
+ *    The AVVO event id is the document id, so a retried delivery
+ *    overwrites the same document instead of duplicating.
  *  - Answers 200 right after saving (AVVO retries anything that is not 2xx).
- *  - Does NOT touch submissions, users or emails yet.
+ *  - Then applies the event to the submission (approve / reject) through
+ *    services/avvoApprovalService.js, passing AVVO's moderation comment
+ *    (data.moderation.comment) so a rejection shows AVVO's real reason.
  *
  * ENVIRONMENT VARIABLES (Render)
  *  AVVO_ENABLED         true / anything else = off
@@ -85,7 +87,12 @@ router.post('/', async (req, res) => {
   const obj = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   const data = obj.data && typeof obj.data === 'object' ? obj.data : {};
   const eventType = String(obj.event || req.headers['x-avvo-event'] || 'unknown');
-   const eventId = obj.id || null;
+  const eventId = obj.id || null;
+
+  // AVVO's reason for returning a release: data.moderation.comment
+  const moderation = data.moderation && typeof data.moderation === 'object' ? data.moderation : {};
+  const moderationComment = moderation.comment ? String(moderation.comment) : '';
+
   let eventRef = null;
 
   try {
@@ -103,7 +110,7 @@ router.post('/', async (req, res) => {
       receivedAt: Date.now(),
       processed: false,
     };
-        if (eventId) {
+    if (eventId) {
       eventRef = col.doc(String(eventId).replace(/[\/\s]/g, '_').slice(0, 200));
       await eventRef.set(record);
     } else {
@@ -116,7 +123,7 @@ router.post('/', async (req, res) => {
     return res.status(500).json({ success: false, message: 'Could not save event.' });
   }
 
-   res.status(200).json({ success: true });
+  res.status(200).json({ success: true });
 
   // AVVO has its 200 already. Now update the submission; problems are logged and saved on the event.
   try {
@@ -124,6 +131,7 @@ router.post('/', async (req, res) => {
       partnerReleaseId: data.partner_release_id,
       status: data.status,
       upc: data.upc,
+      moderationComment,
     });
     if (eventRef) await eventRef.update({ processed: true, processedAt: Date.now(), result: JSON.stringify(out).slice(0, 500) });
   } catch (err) {

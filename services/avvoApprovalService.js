@@ -10,12 +10,16 @@
  *                           Empty or missing = no release is ever approved by the webhook
  *
  * AVVO status "returned" = rejected. The reason comes from data.moderation.comment.
+ * If the first "returned" event has no comment and a later one has it, the later
+ * comment replaces the "No comment was given" placeholder.
  */
 const admin = require('firebase-admin');
 const logger = require('../utils/logger');
 const { sendApprovalEmail } = require('./approvalNotifyService');
 const { deleteApprovedAudio } = require('./audioCleanup');
 const { submissionIdFromPartnerReleaseId } = require('./avvoService');
+
+const NO_COMMENT_TEXT = 'AVVO returned this release. No comment was given.';
 
 const norm = (s) => String(s == null ? '' : s).trim().toLowerCase().replace(/[\s-]+/g, '_');
 const approvedList = () => String(process.env.AVVO_APPROVED_STATUSES || '').split(',').map(norm).filter(Boolean);
@@ -57,21 +61,36 @@ async function handleAvvoEvent({ partnerReleaseId, status, upc, moderationCommen
   }
 
   const inReview = String(d.status || '').trim().toLowerCase() === 'review';
+  const isReturned = !!status && norm(status) === 'returned';
+  const comment = String(moderationComment == null ? '' : moderationComment).trim();
 
   // ---- REJECT: AVVO sent the release back ("returned") ----
-  const shouldReject = !!status && norm(status) === 'returned' && inReview;
+  const shouldReject = isReturned && inReview;
 
   if (shouldReject) {
-    const comment = String(moderationComment == null ? '' : moderationComment).trim();
     Object.assign(update, {
       status: 'Rejected',
-      rejectionReason: comment || 'AVVO returned this release. No comment was given.',
+      rejectionReason: comment || NO_COMMENT_TEXT,
       rejectedBy: 'avvo-webhook',
       rejectedAt: Date.now(),
     });
     await ref.update(update);
-    logger.info(`[avvo-approval] ${id} rejected: AVVO status "returned".`);
+    logger.info(`[avvo-approval] ${id} rejected: AVVO status "returned"${comment ? '' : ' (no comment yet)'}.`);
     return { handled: true, approved: false, rejected: true };
+  }
+
+  // ---- LATE COMMENT: already rejected by the webhook with the placeholder,
+  //      and this event now carries the real reason ----
+  if (isReturned && comment) {
+    const alreadyRejected = String(d.status || '').trim().toLowerCase() === 'rejected';
+    const currentReason = String(d.rejectionReason || '').trim();
+    const isPlaceholder = !currentReason || currentReason === NO_COMMENT_TEXT;
+    if (alreadyRejected && d.rejectedBy === 'avvo-webhook' && isPlaceholder) {
+      update.rejectionReason = comment;
+      await ref.update(update);
+      logger.info(`[avvo-approval] ${id}: AVVO comment added to the rejection.`);
+      return { handled: true, approved: false, commentUpdated: true };
+    }
   }
 
   // ---- APPROVE ----

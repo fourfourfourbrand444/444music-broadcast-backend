@@ -228,7 +228,7 @@ function validUpc(value, warnings) {
   if (!/\d/.test(raw)) return null;
   const digits = raw.replace(/[\s-]/g, '');
    if (/^\d{12,14}$/.test(digits) && gs1CheckOk(digits)) return digits;
-  warnings.push(`UPC "${raw}" is not 12-14 digits, so it was not sent and AVVO will assign one.`);
+    warnings.push(`UPC "${raw}" is not 12-14 digits with a valid check digit, so it was not sent and AVVO will assign one.`);
   return null;
 }
 
@@ -500,12 +500,75 @@ function buildRelease(data, partnerReleaseId) {
     territory: 'worldwide',
     tracks: tracks.map((x) => x.track),
   };
-  if (clean(data.genre)) payload.genre = toAvvoGenre(data.genre);
+   if (clean(data.genre)) payload.genre = toAvvoGenre(data.genre);
+   const NO_SUB_GENRES = ['Disco', 'Other'];
+  if (!clean(data.mainGenreSub) && !NO_SUB_GENRES.includes(payload.genre)) {
+    throw new AvvoSendError(`Sub genre is missing for genre "${payload.genre || 'none'}". AVVO requires it. Set it on this release before sending.`, 400);
+  }
+  if (clean(data.mainGenreSub)) payload.subgenre = clean(data.mainGenreSub);
+  if (clean(data.alternateGenre)) payload.alternate_genre_primary = clean(data.alternateGenre);
+  if (clean(data.alternateGenreSub)) payload.alternate_genre_sub = clean(data.alternateGenreSub);
+  if (clean(data.productVersion)) payload.product_version = clean(data.productVersion);
   if (languageCode) payload.language = languageCode;
   if (lyricists.length) payload.author = lyricists.join(', ');
   if (composers.length) payload.composer = composers.join(', ');
-  if (isSingle && tracks[0].feats.length) payload.feat_artist = tracks[0].feats.join(', ');
+   if (isSingle && tracks[0].feats.length) payload.feat_artist = tracks[0].feats.join(', ');
 
+  // AVVO form answers that are the same for every 444Music release.
+ payload.is_compilation = data.isCompilation === undefined ? false : isYes(data.isCompilation);
+  payload.volumes = 1;
+
+  // Artist agreement answers saved on the submission (data.agreements).
+  // No answer saved (old releases) = true.
+  const ag = data.agreements || {};
+  const yn = (v) => (v === undefined || v === null || v === '' ? true : isYes(v));
+  payload.agreements = {
+    soundexchange: yn(ag.soundexchange),
+    youtube_music: yn(ag.youtube_music),
+    youtube_content_id: yn(ag.youtube_content_id),
+    facebook_monetization: yn(ag.facebook_monetization),
+    tiktok_monetization: yn(ag.tiktok_monetization),
+    licensing: yn(ag.licensing),
+    avvo_youtube_channel: yn(ag.avvo_youtube_channel),
+  };
+  payload.youtube_content_id = payload.agreements.youtube_content_id;
+  payload.price_band = 'Full';
+   payload.public_domain_status = ['No', 'Yes', 'Not Sure'].includes(clean(data.publicDomainStatus)) ? clean(data.publicDomainStatus) : 'No';
+  payload.has_license = data.hasLicense === undefined ? true : isYes(data.hasLicense);
+  payload.is_original = data.isOriginal === undefined ? true : isYes(data.isOriginal);
+  payload.has_us_broadcast_rights = data.hasUsBroadcastRights === undefined ? true : isYes(data.hasUsBroadcastRights);
+  if (clean(data.version)) payload.version = clean(data.version);
+
+  // Covers, samples, compilations: AVVO needs Content ID, Facebook and TikTok = false.
+  if (
+    payload.public_domain_status !== 'No' ||
+    payload.is_compilation ||
+    !payload.is_original ||
+    /cover/i.test(clean(data.version))
+  ) {
+    const ag2 = payload.agreements;
+    if (ag2.youtube_content_id || ag2.facebook_monetization || ag2.tiktok_monetization) {
+      warnings.push('Cover, sample or compilation release: YouTube Content ID, Facebook and TikTok were set to No.');
+    }
+    ag2.youtube_content_id = false;
+    ag2.facebook_monetization = false;
+    ag2.tiktok_monetization = false;
+    payload.youtube_content_id = false;
+  }
+
+  // Named artists (main + featured) from every track, no duplicates.
+  const releaseArtists = [];
+  audioFiles.forEach((t) => {
+    (Array.isArray(t && t.artists) ? t.artists : []).forEach((a) => {
+      const name = clean(a && a.name);
+      if (!name) return;
+      const role = a.type === 'featured' ? 'featured' : 'primary';
+      if (!releaseArtists.some((r) => r.name.toLowerCase() === name.toLowerCase() && r.role === role)) {
+        releaseArtists.push({ name, role });
+      }
+    });
+  });
+  if (releaseArtists.length) payload.artists = releaseArtists;
   // Catalog number. AVVO's panel shows "Catalog #" and AVVO asked for it on every release.
   // The field name below is our best match; AVVO_CATALOG_FIELD on Render overrides it
   // once AVVO confirms the exact name. Set it to "off" to stop sending it.
@@ -516,23 +579,10 @@ function buildRelease(data, partnerReleaseId) {
     else warnings.push('This submission has no catalog number, so none was sent.');
   }
 
-  // Optional distribution flags. Each one is sent only when set on Render.
-  // They decide how AVVO claims and monetizes the music, so none is on by default.
-  [
-    ['youtube_content_id', 'AVVO_YOUTUBE_CONTENT_ID'],
-    ['youtube_music', 'AVVO_YOUTUBE_MUSIC'],
-    ['tiktok_monetization', 'AVVO_TIKTOK_MONETIZATION'],
-    ['facebook_monetization', 'AVVO_FACEBOOK_MONETIZATION'],
-    ['soundexchange', 'AVVO_SOUNDEXCHANGE'],
-  ].forEach(([field, envName]) => {
-    const value = envFlag(envName);
-    if (value !== undefined) payload[field] = value;
-  });
-
+  // Agreement answers come only from the artist's saved choices (data.agreements).
   // Optional: AVVO_DSP="spotify,apple_music,..." sends a store list.
   // Left unset, dsp is left out and AVVO decides.
-  const dsp = String(process.env.AVVO_DSP || '').split(',').map((s) => s.trim()).filter(Boolean);
-  if (dsp.length) payload.dsp = dsp;
+   // dsp is not sent: AVVO delivers to all stores automatically and ignores this field.
 
   return {
     payload,

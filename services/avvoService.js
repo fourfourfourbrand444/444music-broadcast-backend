@@ -217,11 +217,17 @@ function cleanHolder(value) {
     .trim();
 }
 
+function gs1CheckOk(d) {
+  let sum = 0;
+  for (let i = d.length - 2, w = 3; i >= 0; i--, w = w === 3 ? 1 : 3) sum += Number(d[i]) * w;
+  return (10 - (sum % 10)) % 10 === Number(d[d.length - 1]);
+}
+
 function validUpc(value, warnings) {
   const raw = clean(value);
   if (!/\d/.test(raw)) return null;
   const digits = raw.replace(/[\s-]/g, '');
-  if (/^\d{12,14}$/.test(digits)) return digits;
+   if (/^\d{12,14}$/.test(digits) && gs1CheckOk(digits)) return digits;
   warnings.push(`UPC "${raw}" is not 12-14 digits, so it was not sent and AVVO will assign one.`);
   return null;
 }

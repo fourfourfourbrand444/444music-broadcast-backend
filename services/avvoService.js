@@ -502,8 +502,21 @@ function buildRelease(data, partnerReleaseId) {
   };
    if (clean(data.genre)) payload.genre = toAvvoGenre(data.genre);
    const NO_SUB_GENRES = ['Disco', 'Other'];
+   const DEFAULT_SUBS = {
+    'Pop': 'Dance Pop', 'Rock': 'Alternative', 'Hip-Hop/Rap': 'Hip-Hop', 'R&B': 'Contemporary R&B',
+    'Electronic': 'Deep House', 'Jazz': 'Smooth Jazz', 'Classical': 'Modern Classical', 'Country': 'Country Pop',
+    'Latin': 'Latin Pop', 'Reggaeton': 'Perreo', 'K-Pop': 'K-R&B', 'Indie': 'Indie Pop', 'Metal': 'Heavy Metal',
+    'Punk': 'Pop Punk', 'Blues': 'Electric Blues', 'Soul': 'Southern Soul', 'Funk': 'Electro Funk',
+    'House': 'Deep House', 'Techno': 'Minimal Techno', 'Trap': 'Trap', 'Drill': 'UK Drill',
+    'Afrobeat': 'Afrobeats', 'Dancehall': 'Dancehall', 'Folk': 'Acoustic Folk'
+  };
   if (!clean(data.mainGenreSub) && !NO_SUB_GENRES.includes(payload.genre)) {
-    throw new AvvoSendError(`Sub genre is missing for genre "${payload.genre || 'none'}". AVVO requires it. Set it on this release before sending.`, 400);
+    const fallbackSub = DEFAULT_SUBS[payload.genre];
+    if (!fallbackSub) {
+      throw new AvvoSendError(`Sub genre is missing for genre "${payload.genre || 'none'}". AVVO requires it. Set it on this release before sending.`, 400);
+    }
+    data.mainGenreSub = fallbackSub;
+    warnings.push(`No sub genre was saved on this release, so "${fallbackSub}" was used as a default.`);
   }
   if (clean(data.mainGenreSub)) payload.subgenre = clean(data.mainGenreSub);
   if (clean(data.alternateGenre)) payload.alternate_genre_primary = clean(data.alternateGenre);

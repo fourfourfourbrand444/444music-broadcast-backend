@@ -33,5 +33,34 @@ async function deleteApprovedAudio(submissionId) {
   logger.info(`[audio-cleanup] ${submissionId}: deleted ${result.deleted.length} WAV file(s) after approval.`);
   return { ok: true, deleted: result.deleted.length };
 }
+async function deleteRejectedAudio(submissionId) {
+  const ref = admin.firestore().collection('submissions').doc(submissionId);
+  const snap = await ref.get();
+  if (!snap.exists) return { ok: false, reason: 'not_found' };
+  const d = snap.data() || {};
+  if (String(d.status || '').trim().toLowerCase() !== 'rejected') return { ok: false, reason: 'not_rejected' };
+  if (d.avvoSendState === 'sending') return { ok: false, reason: 'sending' };
 
-module.exports = { deleteApprovedAudio };
+  const keys = [];
+  const audioFiles = (Array.isArray(d.audioFiles) ? d.audioFiles : []).map((f) => {
+    const u = f && typeof f.url === 'string' ? f.url : '';
+    if (u.startsWith('r2:') && isAudioKey(u.slice(3))) {
+      keys.push(u.slice(3));
+      const { key, ...rest } = f;
+      return { ...rest, url: '' }; // empty url makes the fix page demand a new WAV
+    }
+    return f;
+  });
+  if (!keys.length) return { ok: true, deleted: 0 };
+
+  const result = await deleteKeys(keys);
+  if (result.failed.length) {
+    logger.error(`[audio-cleanup] ${submissionId}: could not delete ${result.failed.length} rejected file(s).`);
+    return { ok: false, reason: 'delete_failed' };
+  }
+  await ref.update({ audioFiles, audioDeleted: true, audioDeletedAt: Date.now() });
+  logger.info(`[audio-cleanup] ${submissionId}: deleted ${result.deleted.length} WAV file(s) after rejection.`);
+  return { ok: true, deleted: result.deleted.length };
+}
+
+module.exports = { deleteApprovedAudio, deleteRejectedAudio };

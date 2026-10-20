@@ -575,7 +575,7 @@ function buildRelease(data, partnerReleaseId) {
     (Array.isArray(t && t.artists) ? t.artists : []).forEach((a) => {
       const name = clean(a && a.name);
       if (!name) return;
-      const role = a.type === 'featured' ? 'featured' : 'primary';
+          const role = a.type === 'featured' ? 'featured' : a.type === 'secondary' ? 'secondary' : 'primary';
       if (!releaseArtists.some((r) => r.name.toLowerCase() === name.toLowerCase() && r.role === role)) {
         releaseArtists.push({ name, role });
       }

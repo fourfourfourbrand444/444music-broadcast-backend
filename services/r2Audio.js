@@ -76,7 +76,16 @@ async function createReadUrl(key, expiresIn = 3600, downloadName = '') {
 async function getObjectBuffer(key) {
   if (!isAudioKey(key)) throw new Error('Invalid audio key.');
   const res = await getClient().send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
-  return Buffer.from(await res.Body.transformToByteArray());
+   const size = Number(res.ContentLength);
+  if (!(size > 0)) return Buffer.from(await res.Body.transformToByteArray());
+  // One buffer of the exact size, filled piece by piece (no second copy).
+  const buf = Buffer.allocUnsafe(size);
+  let offset = 0;
+  for await (const chunk of res.Body) {
+    chunk.copy(buf, offset);
+    offset += chunk.length;
+  }
+  return offset === size ? buf : buf.subarray(0, offset);
 }
 
 // Used after approval and when a submission is deleted. Deleting is free on R2.

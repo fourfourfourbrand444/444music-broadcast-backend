@@ -690,7 +690,7 @@ async function avvoRequest(cfg, method, path, body, extraHeaders) {
   if (!res.ok) {
     const e = (json && json.error) || {};
     const retryAfter = Number(res.headers.get('retry-after'));
-    throw new AvvoApiError(e.message || `AVVO returned HTTP ${res.status}.`, {
+        throw new AvvoApiError(e.message || `AVVO returned HTTP ${res.status} on ${method} ${path}${json ? '' : ' - ' + text.slice(0, 150).replace(/\s+/g, ' ')}.`, {
       status: res.status,
       code: e.code,
       field: e.field,

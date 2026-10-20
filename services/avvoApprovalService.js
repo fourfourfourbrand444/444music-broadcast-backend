@@ -16,7 +16,7 @@
 const admin = require('firebase-admin');
 const logger = require('../utils/logger');
 const { sendApprovalEmail } = require('./approvalNotifyService');
-const { deleteApprovedAudio } = require('./audioCleanup');
+const { deleteApprovedAudio, deleteRejectedAudio } = require('./audioCleanup');
 const { submissionIdFromPartnerReleaseId } = require('./avvoService');
 
 const NO_COMMENT_TEXT = 'AVVO returned this release. No comment was given.';
@@ -75,7 +75,12 @@ async function handleAvvoEvent({ partnerReleaseId, status, upc, moderationCommen
       rejectedAt: Date.now(),
     });
     await ref.update(update);
-    logger.info(`[avvo-approval] ${id} rejected: AVVO status "returned"${comment ? '' : ' (no comment yet)'}.`);
+      logger.info(`[avvo-approval] ${id} rejected: AVVO status "returned"${comment ? '' : ' (no comment yet)'}.`);
+    try {
+      await deleteRejectedAudio(id);
+    } catch (err) {
+      logger.error(`[avvo-approval] ${id}: rejected audio cleanup error: ${err.message}`);
+    }
     return { handled: true, approved: false, rejected: true };
   }
 

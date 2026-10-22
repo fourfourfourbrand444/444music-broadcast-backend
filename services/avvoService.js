@@ -802,12 +802,13 @@ async function runSend(submissionId, cfg, built, ctx) {
   const ref = submissionRef(submissionId);
   const FieldValue = admin.firestore.FieldValue;
   try {
-    const payload = built.payload;
+        const payload = built.payload;
+    const uniq = Date.now().toString(36); // new file name on every attempt, so a retry never collides
 
     payload.cover_upload_id = await uploadAsset(cfg, {
       type: 'artwork',
       url: built.coverUrl,
-      filename: `${ctx.partnerReleaseId}-cover.jpg`,
+            filename: `${ctx.partnerReleaseId}-${uniq}-cover.jpg`,
       contentType: 'image/jpeg',
       label: 'cover art',
       maxBytes: MAX_COVER_BYTES,
@@ -817,7 +818,7 @@ async function runSend(submissionId, cfg, built, ctx) {
       payload.tracks[i].audio_upload_id = await uploadAsset(cfg, {
         type: 'audio',
         url: built.trackAudioUrls[i],
-        filename: `${ctx.partnerReleaseId}-t${i + 1}.wav`,
+                filename: `${ctx.partnerReleaseId}-${uniq}-t${i + 1}.wav`,
         contentType: 'audio/wav',
         label: `track ${i + 1} audio`,
         maxBytes: MAX_AUDIO_BYTES,

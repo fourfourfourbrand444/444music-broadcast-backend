@@ -633,7 +633,7 @@ function assertSendable(data) {
   ) {
     throw new AvvoSendError('This release is already being sent to AVVO.', 409);
   }
-  if (data.avvoReleaseId && clean(data.avvoStatus).toLowerCase() !== 're  if (data.avvoReleaseId && !['returned', 'deleted'].includes(clean(data.avvoStatus).toLowerCase())) {
+    if (data.avvoReleaseId && !['returned', 'deleted'].includes(clean(data.avvoStatus).toLowerCase())) {
     throw new AvvoSendError(`Already sent to AVVO (status: ${data.avvoStatus || 'unknown'}).`, 409);
   }
 }

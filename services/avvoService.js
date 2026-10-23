@@ -421,7 +421,12 @@ function buildRelease(data, partnerReleaseId) {
     throw new AvvoSendError('Release date must be at least 3 days from today. Ask the artist to pick a later date.', 400);
   }
 
-  const audioFiles = Array.isArray(data.audioFiles) ? data.audioFiles : [];
+   // AVVO has no secondary role, so any secondary artist is sent as featured.
+  const audioFiles = (Array.isArray(data.audioFiles) ? data.audioFiles : []).map((t) => (
+    t && Array.isArray(t.artists)
+      ? { ...t, artists: t.artists.map((a) => (a && a.type === 'secondary' ? { ...a, type: 'featured' } : a)) }
+      : t
+  ));
   if (!audioFiles.length) throw new AvvoSendError('This submission has no audio files.', 400);
   if (isSingle && audioFiles.length > 1) throw new AvvoSendError('A single can only have one track.', 400);
 

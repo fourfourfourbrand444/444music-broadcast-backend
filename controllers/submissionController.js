@@ -35,6 +35,7 @@
 const emailProvider = require('../services/emailProvider');
 const logger = require('../utils/logger');
 const { createReadUrl } = require('../services/r2Audio');
+const { createMp3Link } = require('../services/mp3Download');
 const ADMIN_EMAIL = process.env.ADMIN_NOTIFICATION_EMAIL || process.env.FROM_EMAIL;
 const CONTACT_EMAIL = 'contact@444musicdistro.com'.includes('@') ? '444musicdistro@gmail.com' : '444musicdistro@gmail.com';
 const LOGO_URL = 'https://444music-distribution.vercel.app/black.png';
@@ -187,7 +188,7 @@ function _audioSection(files) {
             </td>
             <td align="right" style="vertical-align:top;">
                            ${/^https?:\/\//i.test(f.url || '')
-                ? `<a href="${f.url}" style="display:inline-block; background:${_colors.header}; color:#ffffff; text-decoration:none; font-family:Arial,Helvetica,sans-serif; font-size:11px; font-weight:700; padding:8px 14px; border-radius:7px;">DOWNLOAD AUDIO</a>`
+                ? `<a href="${f.url}" style="display:inline-block; background:${_colors.header}; color:#ffffff; text-decoration:none; font-family:Arial,Helvetica,sans-serif; font-size:11px; font-weight:700; padding:8px 14px; border-radius:7px;">DOWNLOAD MP3</a>`
                 : `<span style="font-family:Arial,Helvetica,sans-serif; font-size:11px; color:${_colors.label};">File link unavailable</span>`}
             </td>
           </tr>
@@ -560,7 +561,7 @@ async function _signAudioLinks(files) {
     if (!f || typeof f.url !== 'string' || !f.url.startsWith('r2:')) return f;
     const key = f.url.slice(3);
     try {
-      const url = await createReadUrl(key, SEVEN_DAYS, f.title || 'track');
+      const url = createMp3Link(key, SEVEN_DAYS, f.title || 'track');
       return { ...f, url };
     } catch (err) {
       logger.error(`Could not sign audio link for ${key}: ${err.message}`);

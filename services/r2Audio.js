@@ -72,6 +72,12 @@ async function createReadUrl(key, expiresIn = 3600, downloadName = '') {
   return getSignedUrl(getClient(), command, { expiresIn });
 }
 
+// Used by the MP3 download route (streams the WAV without loading it all in memory).
+async function getObjectStream(key) {
+  if (!isAudioKey(key)) throw new Error('Invalid audio key.');
+  return getClient().send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
+}
+
 // Used by the AVVO sender later (server downloads the file itself).
 async function getObjectBuffer(key) {
   if (!isAudioKey(key)) throw new Error('Invalid audio key.');
@@ -107,4 +113,4 @@ async function deleteKeys(keys) {
   return result;
 }
 
-module.exports = { isAudioKey, createUploadUrl, createReadUrl, getObjectBuffer, deleteKeys };
+module.exports = { isAudioKey, createUploadUrl, createReadUrl, getObjectBuffer, getObjectStream, deleteKeys };

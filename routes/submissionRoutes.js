@@ -18,6 +18,9 @@ const asyncHandler = require('../utils/asyncHandler');
 const submissionController = require('../controllers/submissionController');
 const approvalController = require('../controllers/approvalController');
 const { resolveFromSpotifyLink } = require('../services/spotifyLinkResolver');
+const { handleMp3Download } = require('../services/mp3Download');
+// Public signed link from the admin email. Must stay ABOVE requireAppSecret.
+router.get('/audio-mp3', generalLimiter, asyncHandler(handleMp3Download));
 router.use(requireAppSecret);
 router.use(generalLimiter);
 // POST /api/submissions/notify

@@ -23,6 +23,49 @@ const { handleMp3Download } = require('../services/mp3Download');
 router.get('/audio-mp3', generalLimiter, asyncHandler(handleMp3Download));
 router.use(requireAppSecret);
 router.use(generalLimiter);
+
+// Starts the partner upload workflow on GitHub
+router.post('/send-to-partner', requireAppSecret, async (req, res) => {
+  try {
+    const { submissionId, autoSubmit } = req.body || {};
+    if (!submissionId || typeof submissionId !== 'string') {
+      return res.status(400).json({ error: 'submissionId is required' });
+    }
+    const token = process.env.GH_UPLOADER_TOKEN;
+    const repo = process.env.GH_UPLOADER_REPO;
+    if (!token || !repo) {
+      return res.status(500).json({ error: 'Partner uploader is not configured' });
+    }
+    const ghRes = await fetch(
+      `https://api.github.com/repos/${repo}/actions/workflows/upload.yml/dispatches`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ref: 'main',
+          inputs: {
+            submissionId,
+            autoSubmit: autoSubmit === true || autoSubmit === 'true' ? 'true' : 'false',
+          },
+        }),
+      }
+    );
+    if (ghRes.status !== 204) {
+      const text = await ghRes.text();
+      console.error('GitHub dispatch failed', ghRes.status, text);
+      return res.status(502).json({ error: 'GitHub rejected the request', status: ghRes.status });
+    }
+    return res.status(202).json({ ok: true });
+  } catch (err) {
+    console.error('send-to-partner error', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
 // POST /api/submissions/notify
 router.post(
   '/notify',

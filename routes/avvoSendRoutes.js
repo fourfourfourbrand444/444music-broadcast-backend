@@ -37,7 +37,7 @@ function handleError(err, req, res) {
 
 router.post('/:id/send', requireAdminFirebase, checkId, async (req, res) => {
   try {
-    const result = await startSend(req.params.id, req.admin);
+      const result = await require('../services/avvoRobotService').startRobotSend(req.params.id, req.admin);
     return res.status(202).json({ success: true, ...result });
   } catch (err) {
     return handleError(err, req, res);

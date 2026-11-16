@@ -966,7 +966,7 @@ async function previewPayload(submissionId) {
 
 module.exports = {
   startSend,
-  previewPayload,
+    previewPayload, ensureCatalogNumber, assertSendable,
   submissionIdFromPartnerReleaseId,
   AvvoSendError,
 };

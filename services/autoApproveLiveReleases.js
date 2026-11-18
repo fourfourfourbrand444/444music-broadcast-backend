@@ -332,6 +332,16 @@ async function checkReviewSubmissionsForLiveRelease() {
   if (snap.empty) return { checked: 0, approved: 0 };
 
   const spotifyToken = await getSpotifyToken();
+
+  // Songs already Approved, keyed by artist + title, so a re-upload is never auto-approved
+  const liveKeys = new Map();
+  const approvedNow = await db.collection('submissions').where('status', '==', 'Approved').get();
+  approvedNow.docs.forEach((d) => {
+    const s = d.data();
+    const k = `${normalize(s.artistName)}|${normalize(s.releaseTitle || s.songTitle || s.title)}`;
+    if (!liveKeys.has(k)) liveKeys.set(k, new Set());
+    liveKeys.get(k).add(d.id);
+  });
   let checked = 0, approved = 0;
 
   for (const docSnap of snap.docs) {
@@ -339,6 +349,13 @@ async function checkReviewSubmissionsForLiveRelease() {
     const artistName = sub.artistName || '';
     const songTitle = sub.releaseTitle || sub.songTitle || sub.title || '';
     if (!artistName || !songTitle) continue;
+
+    const dupKey = `${normalize(artistName)}|${normalize(songTitle)}`;
+    const dupIds = [...(liveKeys.get(dupKey) || [])].filter((id) => id !== docSnap.id);
+    if (dupIds.length) {
+      console.log(`Skipping "${songTitle}" by ${artistName}: same song already Approved (${dupIds[0]}). Not auto-approving a duplicate.`);
+      continue;
+    }
 
     checked++;
 
@@ -350,8 +367,13 @@ async function checkReviewSubmissionsForLiveRelease() {
     }
 
     if (result) {
-      const catalogNumber = sub.catalogNumber || (await nextCatalogNumber());
       const upc = result.upc || sub.upc || '';
+      if (!String(upc).trim()) {
+        console.log(`Live match for "${songTitle}" by ${artistName} but no UPC on file. NOT approving. Enter the UPC in the admin panel first.`);
+        await docSnap.ref.update({ lastCheckedAt: admin.firestore.FieldValue.serverTimestamp() });
+        continue;
+      }
+      const catalogNumber = sub.catalogNumber || (await nextCatalogNumber());
       const slug = sub.smartLinkSlug || slugify(artistName, songTitle);
 
       // Whichever store this particular check found a URL for — build

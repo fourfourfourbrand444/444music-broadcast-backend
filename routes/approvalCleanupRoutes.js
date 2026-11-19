@@ -2,7 +2,9 @@
  * routes/approvalCleanupRoutes.js
  *   POST /api/approval-cleanup/:id            admin only (Firebase login + ADMIN_EMAILS)
  *   POST /api/approval-cleanup/rejected/:id   admin only, deletes audio of a Rejected release
+ *   POST /api/approval-cleanup/robot/:id      robots only (x-app-secret), deletes audio of an Approved release
  */
+const crypto = require('crypto');
 const express = require('express');
 const requireAdminFirebase = require('../middleware/requireAdminFirebase');
 const { deleteApprovedAudio, deleteRejectedAudio } = require('../services/audioCleanup');
@@ -17,6 +19,17 @@ const MESSAGES = {
   sending: [409, 'This release is being sent to AVVO right now. Try again in a minute.'],
   delete_failed: [502, 'Could not delete the audio from R2. Try again.'],
 };
+
+function requireRobotSecret(req, res, next) {
+  const expected = process.env.APP_SECRET || '';
+  const given = String(req.get('x-app-secret') || '');
+  const a = Buffer.from(given);
+  const b = Buffer.from(expected);
+  if (!expected || a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    return res.status(401).json({ success: false, message: 'Unauthorized.' });
+  }
+  next();
+}
 
 function makeHandler(label, deleteFn) {
   return async (req, res) => {
@@ -37,6 +50,7 @@ function makeHandler(label, deleteFn) {
 }
 
 router.post('/rejected/:id', requireAdminFirebase, makeHandler('rejection-cleanup', deleteRejectedAudio));
+router.post('/robot/:id', requireRobotSecret, makeHandler('robot-approval-cleanup', deleteApprovedAudio));
 router.post('/:id', requireAdminFirebase, makeHandler('approval-cleanup', deleteApprovedAudio));
 
 module.exports = router;

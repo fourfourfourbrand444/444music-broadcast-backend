@@ -10,6 +10,9 @@
  *   releaseTitle,   // song / release title
  *   upc,            // UPC code
  *   catalogNumber,  // catalog number (optional)
+ *   slug,           // smartLinkSlug of the release. When present the main button is
+ *                   // "Share canvas to fans" (opens the poster page). Without it the
+ *                   // email keeps the old "Log in to your dashboard" button.
  *   loginUrl,       // optional, defaults to the dashboard login
  * }
  *
@@ -37,6 +40,10 @@ function renderApprovalEmail(d) {
   const upc = String(d.upc || '').trim();
   const cat = String(d.catalogNumber || '').trim();
   const loginUrl = d.loginUrl || LOGIN_URL;
+  const slug = String(d.slug || '').trim().toLowerCase();
+  const posterUrl = /^[a-z0-9-]{1,120}$/.test(slug)
+    ? `${SITE_URL}/poster?s=${encodeURIComponent(slug)}`
+    : '';
 
   const subject = `Your release "${title}" has been approved`;
   const preheader = `"${title}" has been approved and is on its way to the stores.`;
@@ -61,6 +68,28 @@ function renderApprovalEmail(d) {
   const pill = 'display:inline-block;margin:0 6px 8px 0;padding:7px 13px;border:1px solid #dcdcdc;border-radius:999px;font-family:' + FONT + ';font-size:13px;line-height:18px;color:#111111;';
   const pills = STORES.map(s => `<span style="${pill}">${esc(s)}</span>`).join('\n                        ')
     + `\n                        <span style="display:inline-block;margin:0 0 8px 0;padding:7px 4px;font-family:${FONT};font-size:13px;line-height:18px;color:#6b6b6b;">and more</span>`;
+
+  const button = (href, label) => `
+                  <table role="presentation" class="btn" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td bgcolor="#000000" style="border-radius:6px;">
+                        <a href="${esc(href)}" style="display:inline-block;padding:14px 26px;font-family:${FONT};font-size:15px;line-height:20px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:6px;text-align:center;">${label}</a>
+                      </td>
+                    </tr>
+                  </table>`;
+
+  // With a slug: poster button first, small login link underneath. Without: the old login button.
+  const cta = posterUrl ? `
+              <tr>
+                <td style="padding:22px 0 0 0;">
+                  <p style="margin:0 0 14px 0;font-family:${FONT};font-size:15px;line-height:23px;color:#444444;">Your release poster is ready. Download it and share it with your fans.</p>${button(posterUrl, 'Share canvas to fans')}
+                  <p style="margin:16px 0 0 0;font-family:${FONT};font-size:13px;line-height:20px;color:#6b6b6b;"><a href="${esc(loginUrl)}" style="color:#000000;">Log in to your dashboard</a></p>
+                </td>
+              </tr>` : `
+              <tr>
+                <td style="padding:22px 0 0 0;">${button(loginUrl, 'Log in to your dashboard')}
+                </td>
+              </tr>`;
 
   const html = `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
@@ -129,18 +158,7 @@ ${details}
                   </div>
                 </td>
               </tr>
-
-              <tr>
-                <td style="padding:22px 0 0 0;">
-                  <table role="presentation" class="btn" cellpadding="0" cellspacing="0" border="0">
-                    <tr>
-                      <td bgcolor="#000000" style="border-radius:6px;">
-                        <a href="${esc(loginUrl)}" style="display:inline-block;padding:14px 26px;font-family:${FONT};font-size:15px;line-height:20px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:6px;text-align:center;">Log in to your dashboard</a>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
+${cta}
 
               <tr><td style="height:56px;line-height:56px;font-size:0;">&nbsp;</td></tr>
             </table>
@@ -166,6 +184,8 @@ ${details}
     '',
     `Distributing to: ${STORES.join(', ')} and more.`,
     '',
+    posterUrl ? `Your release poster is ready. Share canvas to fans: ${posterUrl}` : null,
+    posterUrl ? '' : null,
     `Log in to your dashboard: ${loginUrl}`,
   ].filter(l => l !== null).join('\n');
 

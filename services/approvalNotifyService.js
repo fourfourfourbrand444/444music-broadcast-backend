@@ -40,6 +40,7 @@ async function sendApprovalEmail(submissionId) {
     releaseTitle: s.releaseTitle || s.songTitle || s.title,
     upc: s.upc,
     catalogNumber: s.catalogNumber,
+    slug: s.smartLinkSlug,
   });
 
   try {
